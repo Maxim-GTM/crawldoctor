@@ -609,36 +609,32 @@ class SessionBackfillService:
 
             if (i // batch_size) % 20 == 0:
                 logger.info("Sessions insert progress", done=min(i + batch_size, len(to_insert)), total=len(to_insert))
-
-        db.commit()
         logger.info("Session rows created", created=created, skipped=skipped)
 
-        # 5a. Remap visits in bulk batches
+        # 5a. Remap visits — VALUES-join update (constant time per batch,
+        # unlike the old CASE approach which degraded as the transaction grew).
         logger.info("Remapping visits", count=len(visit_updates))
         visit_items = list(visit_updates.items())
         for i in range(0, len(visit_items), batch_size):
             chunk = visit_items[i:i+batch_size]
-            # Use a temp table approach via CTE for clean parameterization
             params = {}
-            case_parts = []
-            id_params = []
+            values_parts = []
             for j, (vid, new_sid) in enumerate(chunk):
                 params[f"v{j}"] = vid
                 params[f"s{j}"] = new_sid
-                case_parts.append(f"WHEN id = :v{j} THEN :s{j}")
-                id_params.append(f":v{j}")
+                values_parts.append(f"(:v{j}, :s{j})")
             sql = (
-                f"UPDATE visits SET session_id = CASE {' '.join(case_parts)} END "
-                f"WHERE id IN ({','.join(id_params)})"
+                f"UPDATE visits SET session_id = _map.new_sid "
+                f"FROM (VALUES {','.join(values_parts)}) AS _map(vid, new_sid) "
+                f"WHERE visits.id = _map.vid"
             )
             db.execute(text(sql), params)
-            if (i // batch_size) % 10 == 0:
-                db.commit()
+            db.commit()
+            if (i // batch_size) % 20 == 0:
                 logger.info("Visits remapped progress", done=min(i + batch_size, len(visit_items)), total=len(visit_items))
-        db.commit()
         logger.info("Visits remapped done")
 
-        # 5b. Remap events — bulk update by old→new session_id
+        # 5b. Remap events — same VALUES-join approach
         old_to_new_session: Dict[str, str] = {}
         for entry in audit_log:
             old_to_new_session[entry["old_session_id"]] = entry["new_session_id"]
@@ -648,22 +644,20 @@ class SessionBackfillService:
         for i in range(0, len(mapping_items), batch_size):
             chunk = mapping_items[i:i+batch_size]
             params = {}
-            case_parts = []
-            id_params = []
+            values_parts = []
             for j, (old_sid, new_sid) in enumerate(chunk):
                 params[f"o{j}"] = old_sid
                 params[f"n{j}"] = new_sid
-                case_parts.append(f"WHEN session_id = :o{j} THEN :n{j}")
-                id_params.append(f":o{j}")
+                values_parts.append(f"(:o{j}, :n{j})")
             sql = (
-                f"UPDATE visit_events SET session_id = CASE {' '.join(case_parts)} END "
-                f"WHERE session_id IN ({','.join(id_params)})"
+                f"UPDATE visit_events SET session_id = _map.new_sid "
+                f"FROM (VALUES {','.join(values_parts)}) AS _map(old_sid, new_sid) "
+                f"WHERE visit_events.session_id = _map.old_sid"
             )
             db.execute(text(sql), params)
-            if (i // batch_size) % 10 == 0:
-                db.commit()
+            db.commit()
+            if (i // batch_size) % 20 == 0:
                 logger.info("Events remapped progress", done=min(i + batch_size, len(mapping_items)), total=len(mapping_items))
-        db.commit()
         logger.info("Events remapped done")
 
         # 6b. Write audit log
@@ -685,9 +679,9 @@ class SessionBackfillService:
                 f"VALUES {','.join(values_parts)}"
             )
             db.execute(text(sql), params)
-            if (i // batch_size) % 10 == 0:
-                db.commit()
-        db.commit()
+            db.commit()
+            if (i // batch_size) % 20 == 0:
+                logger.info("Audit log progress", done=min(i + batch_size, len(audit_log)), total=len(audit_log))
         logger.info("Audit log done")
 
         # 7. Delete orphaned session rows — both remapped old sessions and
@@ -710,9 +704,7 @@ class SessionBackfillService:
             )
             result = db.execute(text(sql), params)
             deleted_remapped += result.rowcount
-            if (i // batch_size) % 10 == 0:
-                db.commit()
-        db.commit()
+            db.commit()
         logger.info("Remapped session rows deleted", deleted=deleted_remapped,
                      skipped=len(old_sids_to_delete) - deleted_remapped)
 
