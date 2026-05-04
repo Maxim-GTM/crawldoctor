@@ -3,7 +3,6 @@
 Usage:
     # Against prod via fly proxy (run `fly proxy 15432:5432 -a <app>` first):
     CRAWLDOCTOR_DATABASE_URL="postgresql://postgres:postgres@localhost:15432/crawldoctor" \
-    CRAWLDOCTOR_IPAPI_API_KEY="<key>" \
     python backfill_ip_enrichment.py
 
     # Dry-run: just print how many IPs need enrichment, don't call the API:
@@ -83,10 +82,6 @@ def main():
         if total_candidates == 0:
             print("Nothing to do.")
             return
-
-        if not settings.ipapi_api_key:
-            print("ERROR: CRAWLDOCTOR_IPAPI_API_KEY is not set.", file=sys.stderr)
-            sys.exit(1)
 
         # Override config knobs if provided on the command line.
         if args.batch_size:

@@ -23,7 +23,7 @@ class IpEnrichmentJob:
     """
 
     def sweep(self, db: Session, since: datetime) -> List[Dict[str, Any]]:
-        if not settings.ip_enrichment_enabled or not settings.ipapi_api_key:
+        if not settings.ip_enrichment_enabled:
             return []
         return [{"trigger": "scheduled"}]
 

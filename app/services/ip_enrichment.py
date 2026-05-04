@@ -14,16 +14,16 @@ from app.models.enrichment import IpEnrichment
 logger = structlog.get_logger()
 
 _PRIVATE_IPS = {"127.0.0.1", "::1", ""}
-_PROVIDER = "ipapi"
-_API_BASE = "https://api.apilayer.com/ipapi"
+_PROVIDER = "ipapi.co"
+_API_BASE = "https://ipapi.co"
 
 
 class IpEnrichmentService:
     """Enriches visitor IPs with company identity and network flags.
 
-    Uses apilayer ipapi. On the free plan (5k req/month) security flags
-    (is_proxy, is_tor, etc.) are not returned and stored as NULL.
-    company_domain is derived from connection.sld + connection.tld.
+    Uses ipapi.co free tier (no API key required, 1k req/day).
+    Security flags (is_proxy, is_tor, etc.) are not available on the free
+    tier and stored as NULL. company_domain is not returned by ipapi.co.
     """
 
     def _clean_str(self, val) -> Optional[str]:
@@ -44,44 +44,19 @@ class IpEnrichmentService:
         return s
 
     def _normalize(self, ip: str, raw: dict, first_seen_at, last_seen_at) -> dict:
-        """Map apilayer ipapi response to ip_enrichment columns."""
+        """Map ipapi.co response to ip_enrichment columns."""
         now = datetime.now(timezone.utc)
-        conn = raw.get("connection") or {}
-        sec = raw.get("security") or {}
-
-        sld = self._clean_str(conn.get("sld"))
-        tld = self._clean_str(conn.get("tld"))
-        company_domain = f"{sld}.{tld}" if sld and tld else None
-
-        # is_vpn: apilayer signals VPN via anonymizer_status or vpn_service presence
-        anonymizer = self._clean_str(sec.get("anonymizer_status"))
-        vpn_service = self._clean_str(sec.get("vpn_service"))
-        is_vpn: Optional[bool] = None
-        if sec:
-            is_vpn = bool(vpn_service) or anonymizer in ("active", "suspect")
-
-        is_proxy: Optional[bool] = None
-        if "is_proxy" in sec:
-            is_proxy = bool(sec["is_proxy"])
-
-        is_tor: Optional[bool] = None
-        if "is_tor" in sec:
-            is_tor = bool(sec["is_tor"])
-
-        # hosting_facility is a boolean on paid plans
-        hosting = sec.get("hosting_facility")
-        is_datacenter: Optional[bool] = bool(hosting) if hosting is not None else None
 
         return {
             "ip": ip,
-            "company_domain": company_domain,
-            "company_name": self._clean_str_raw(conn.get("isp") or conn.get("org")),
-            "company_type": self._clean_str_raw(conn.get("organization_type")),
+            "company_domain": None,  # not provided by ipapi.co free tier
+            "company_name": self._clean_str_raw(raw.get("org")),
+            "company_type": None,    # not provided by ipapi.co free tier
             "country": self._clean_str(raw.get("country_code")),
-            "is_datacenter": is_datacenter,
-            "is_vpn": is_vpn,
-            "is_proxy": is_proxy,
-            "is_tor": is_tor,
+            "is_datacenter": None,
+            "is_vpn": None,
+            "is_proxy": None,
+            "is_tor": None,
             "source": _PROVIDER,
             "enriched_at": now,
             "ttl_expires_at": now + timedelta(days=settings.ip_enrichment_ttl_days),
@@ -94,21 +69,17 @@ class IpEnrichmentService:
         }
 
     def _call_api(self, ip: str) -> dict:
-        """Call apilayer ipapi for one IP. Returns raw JSON dict.
+        """Call ipapi.co for one IP. Returns raw JSON dict.
 
         Retries up to 3 times with exponential backoff on transient errors.
         Raises ValueError for permanent failures (4xx excl. 429).
         """
-        if not settings.ipapi_api_key:
-            raise RuntimeError("CRAWLDOCTOR_IPAPI_API_KEY is not configured")
-
-        headers = {"apikey": settings.ipapi_api_key}
-        url = f"{_API_BASE}/{ip}"
+        url = f"{_API_BASE}/{ip}/json/"
 
         for attempt in range(3):
             try:
                 with httpx.Client(timeout=httpx.Timeout(10.0)) as client:
-                    resp = client.get(url, headers=headers)
+                    resp = client.get(url)
 
                 if resp.status_code == 200:
                     return resp.json()
@@ -219,10 +190,6 @@ class IpEnrichmentService:
         """Enrich one batch of candidate IPs. Returns per-batch stats."""
         if not settings.ip_enrichment_enabled:
             return {"skipped": True, "reason": "ip_enrichment_enabled=false"}
-
-        if not settings.ipapi_api_key:
-            logger.warning("ip enrichment skipped: CRAWLDOCTOR_IPAPI_API_KEY not set")
-            return {"skipped": True, "reason": "api_key_missing"}
 
         batch_size = batch_size or settings.ip_enrichment_batch_size
         candidates = self._get_candidates(db, batch_size)

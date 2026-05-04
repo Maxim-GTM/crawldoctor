@@ -101,8 +101,7 @@ class Settings(BaseSettings):
     )
     export_api_enabled: bool = Field(default=True, description="Enable external API access to exports")
 
-    # IP Enrichment (apilayer ipapi)
-    ipapi_api_key: Optional[str] = Field(default=None, description="apilayer ipapi API key")
+    # IP Enrichment (ipapi.co — no API key required)
     ip_enrichment_enabled: bool = Field(default=True, description="Enable IP enrichment")
     ip_enrichment_batch_size: int = Field(default=25, description="IPs per enrichment run (keep low on free plan)")
     ip_enrichment_ttl_days: int = Field(default=30, description="Days before re-enriching an IP")
