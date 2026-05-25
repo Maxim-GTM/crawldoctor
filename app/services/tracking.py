@@ -580,6 +580,7 @@ class TrackingService:
         tracking_id: Optional[str] = None,
         client_id: Optional[str] = None,
         client_side_data: Optional[Dict[str, Any]] = None,
+        message_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Track fine-grained events like scroll, click, navigation."""
         # Filter out performance/RUM noise incorrectly sent as form_submit
@@ -1107,6 +1108,7 @@ class TrackingService:
             "client_side_viewport_size": client_side_data.get('viewport_size') if client_side_data else None,
             "client_side_device_memory": client_side_data.get('device_memory') if client_side_data else None,
             "client_side_connection_type": client_side_data.get('connection_type') if client_side_data else None,
+            "message_id": message_id,
         }
 
         event_id = None
@@ -1116,15 +1118,24 @@ class TrackingService:
         if is_real_form:
             # Form submits bypass batcher — write directly so the background
             # job handler can always find the event in the DB.
-            event = VisitEvent(**event_payload)
-            db.add(event)
-            db.commit()
-            db.refresh(event)
-            event_id = event.id
+            from sqlalchemy.exc import IntegrityError
             try:
-                await job_runner.enqueue("recompute_journey", {"client_id": client_id}, dedup_key=client_id)
-            except Exception as e:
-                logger.error("Failed to enqueue recompute_journey", client_id=client_id, error=str(e))
+                event = VisitEvent(**event_payload)
+                db.add(event)
+                db.commit()
+                db.refresh(event)
+                event_id = event.id
+            except IntegrityError:
+                # Duplicate message_id — already processed, treat as success
+                db.rollback()
+                logger.info("Duplicate form_submit message_id skipped", message_id=message_id)
+            if not settings.rabbitmq_enabled:
+                # Only enqueue the background job directly when not using MQ;
+                # the enrichment consumer handles this when MQ is enabled.
+                try:
+                    await job_runner.enqueue("recompute_journey", {"client_id": client_id}, dedup_key=client_id)
+                except Exception as e:
+                    logger.error("Failed to enqueue recompute_journey", client_id=client_id, error=str(e))
         elif event_batcher.enabled:
             queued = await event_batcher.enqueue(event_payload)
             if not queued:
@@ -1184,7 +1195,21 @@ class TrackingService:
             visit_id=linked_visit.id if linked_visit else None,
         )
 
-        return {"event_id": event_id, "queued": queued}
+        event_country = None
+        try:
+            event_country = session_row.country if session_row else None
+        except Exception:
+            pass
+
+        return {
+            "event_id": event_id,
+            "queued": queued,
+            "needs_enrichment": bool(is_real_form),
+            "session_id": effective_session_id,
+            "visit_id": linked_visit.id if linked_visit else None,
+            "client_id": client_id,
+            "country": event_country,
+        }
     
     async def get_visit_by_id(self, db: Session, visit_id: int) -> Optional[Visit]:
         """Get a visit by ID."""

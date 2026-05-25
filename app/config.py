@@ -35,6 +35,15 @@ class Settings(BaseSettings):
         description="Redis URL or memory:// for in-memory cache"
     )
     redis_ttl: int = Field(default=3600, description="Redis TTL in seconds")
+
+    # RabbitMQ (optional - falls back to direct DB writes when disabled)
+    rabbitmq_url: str = Field(
+        default="amqp://guest:guest@localhost:5672/",
+        description="RabbitMQ AMQP URL"
+    )
+    rabbitmq_enabled: bool = Field(default=False, description="Enable RabbitMQ-backed ingestion pipeline")
+    rabbitmq_max_retries: int = Field(default=3, description="Max consumer retry attempts before routing to DLQ")
+    rabbitmq_prefetch_count: int = Field(default=10, description="Consumer prefetch count")
     
     # Security
     secret_key: str = Field(

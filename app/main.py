@@ -18,6 +18,9 @@ from app.api import tracking_router, analytics_router, auth_router, admin_router
 from app.services.auth import AuthService
 from app.services.event_batcher import event_batcher
 from app.background import job_runner, job_scheduler
+from app.mq import mq_connection
+from app.mq.consumers import core_consumer, enrichment_consumer
+from app.mq.topology import declare_topology
 
 
 # Configure structured logging
@@ -53,8 +56,18 @@ async def lifespan(app: FastAPI):
         await init_db()
         logger.info("Database initialized")
 
-        # Start event batcher
-        await event_batcher.start()
+        # Start MQ pipeline (replaces event batcher) or fall back to in-process batcher
+        if settings.rabbitmq_enabled:
+            event_batcher.enabled = False  # consumers write directly; batcher must not swallow events
+            await mq_connection.connect()
+            channel = await mq_connection.get_consumer_channel()
+            await declare_topology(channel)
+            await channel.close()
+            await core_consumer.start(mq_connection)
+            await enrichment_consumer.start(mq_connection)
+            logger.info("RabbitMQ pipeline started")
+        else:
+            await event_batcher.start()
 
         # Start background job runner and scheduler
         await job_runner.start()
@@ -94,10 +107,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Error stopping job runner", error=str(e))
 
-    try:
-        await event_batcher.stop()
-    except Exception as e:
-        logger.error("Error stopping event batcher", error=str(e))
+    if settings.rabbitmq_enabled:
+        try:
+            await core_consumer.stop()
+            await enrichment_consumer.stop()
+            await mq_connection.close()
+        except Exception as e:
+            logger.error("Error stopping RabbitMQ pipeline", error=str(e))
+    else:
+        try:
+            await event_batcher.stop()
+        except Exception as e:
+            logger.error("Error stopping event batcher", error=str(e))
 
     try:
         await close_db()

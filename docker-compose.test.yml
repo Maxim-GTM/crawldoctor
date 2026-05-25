@@ -1,4 +1,19 @@
 services:
+  # RabbitMQ Message Broker
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: crawldoctor
+      RABBITMQ_DEFAULT_PASS: crawldoctor_password
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
@@ -24,6 +39,8 @@ services:
     environment:
       CRAWLDOCTOR_DATABASE_URL: "postgresql://crawldoctor:crawldoctor_password@postgres:5432/crawldoctor"
       CRAWLDOCTOR_REDIS_URL: "memory://localhost"
+      CRAWLDOCTOR_RABBITMQ_URL: "amqp://crawldoctor:crawldoctor_password@rabbitmq:5672/"
+      CRAWLDOCTOR_RABBITMQ_ENABLED: "true"
       CRAWLDOCTOR_SECRET_KEY: "dev-secret-key-change-in-production"
       CRAWLDOCTOR_DEBUG: "true"
       CRAWLDOCTOR_ENVIRONMENT: "development"
@@ -32,6 +49,8 @@ services:
       - "8000:8000"
     depends_on:
       postgres:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     volumes:
       - ./output:/app/output
