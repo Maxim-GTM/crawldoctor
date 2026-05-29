@@ -18,9 +18,6 @@ from app.api import tracking_router, analytics_router, auth_router, admin_router
 from app.services.auth import AuthService
 from app.services.event_batcher import event_batcher
 from app.background import job_runner, job_scheduler
-from app.mq import mq_connection
-from app.mq.consumers import core_consumer, enrichment_consumer
-from app.mq.topology import declare_topology
 
 
 # Configure structured logging
@@ -58,6 +55,9 @@ async def lifespan(app: FastAPI):
 
         # Start MQ pipeline (replaces event batcher) or fall back to in-process batcher
         if settings.rabbitmq_enabled:
+            from app.mq import mq_connection
+            from app.mq.consumers import core_consumer, enrichment_consumer
+            from app.mq.topology import declare_topology
             event_batcher.enabled = False  # consumers write directly; batcher must not swallow events
             await mq_connection.connect()
             channel = await mq_connection.get_consumer_channel()
@@ -109,6 +109,8 @@ async def lifespan(app: FastAPI):
 
     if settings.rabbitmq_enabled:
         try:
+            from app.mq import mq_connection
+            from app.mq.consumers import core_consumer, enrichment_consumer
             await core_consumer.stop()
             await enrichment_consumer.stop()
             await mq_connection.close()
