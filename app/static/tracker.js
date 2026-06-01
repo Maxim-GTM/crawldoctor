@@ -5,9 +5,10 @@
  * events.  Sends data to the CrawlDoctor backend via sendBeacon / fetch.
  *
  * Template placeholders replaced at serve time:
- *   __TID__       – tracking ID (string literal or "")
- *   __PAGE_URL__  – initial page URL (string literal or "")
- *   __VISIT_ID__  – server-side visit id (number literal or null)
+ *   __TID__              – tracking ID (string literal or "")
+ *   __PAGE_URL__         – initial page URL (string literal or "")
+ *   __VISIT_ID__         – server-side visit id (number literal or null)
+ *   __SECONDARY_ORIGIN__ – optional mirror origin (string literal or "")
  */
 !(function () {
   try {
@@ -32,9 +33,10 @@
     storageGet(sessionStore, 'cd_page_view_sent') || storageSet(sessionStore, 'cd_page_view_sent', '1');
 
     // ---- config from server ----
-    var trackingId = __TID__;
-    var _pageUrl   = __PAGE_URL__;  // consumed by comma expr below
-    var visitId    = __VISIT_ID__;
+    var trackingId      = __TID__;
+    var _pageUrl        = __PAGE_URL__;  // consumed by comma expr below
+    var visitId         = __VISIT_ID__;
+    var secondaryOrigin = __SECONDARY_ORIGIN__;
 
     // ---- determine script origin (for beacon URL) ----
     var scriptSrc = (function () {
@@ -153,6 +155,18 @@
       return d;
     }
 
+    // ---- mirror helper (fire-and-forget to secondary origin) ----
+    function _mirrorEvent(url, body) {
+      try {
+        if (navigator.sendBeacon) {
+          try { navigator.sendBeacon(url, body); return; } catch (_) {}
+        }
+        if (window.fetch) {
+          fetch(url, { method: 'POST', body: body, headers: { 'Content-Type': 'text/plain' }, keepalive: true }).catch(function () {});
+        }
+      } catch (_) {}
+    }
+
     // ---- event sender ----
     var _sending = false;
     function sendEvent(eventType, data) {
@@ -172,6 +186,10 @@
         };
         var url = apiOrigin + '/track/event?tid=' + encodeURIComponent(trackingId || '');
         var body = JSON.stringify(payload);
+
+        if (secondaryOrigin) {
+          _mirrorEvent(secondaryOrigin + '/track/event?tid=' + encodeURIComponent(trackingId || ''), body);
+        }
 
         if (navigator.sendBeacon) {
           try { if (navigator.sendBeacon(url, body)) { _sending = false; return; } } catch (_) {}
