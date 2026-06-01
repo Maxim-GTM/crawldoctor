@@ -1,4 +1,14 @@
 # Single-machine Dockerfile for CrawlDoctor (Frontend + Backend)
+
+# Stage 1: Build React frontend
+FROM node:20-slim AS frontend-builder
+WORKDIR /frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+# Stage 2: Python runtime
 FROM python:3.11-slim
 
 # Set environment variables
@@ -37,8 +47,8 @@ COPY tests/ ./tests/
 # Copy migration downgrade script
 COPY downgrade_migration.py ./
 
-# Copy built frontend
-COPY frontend/build/ ./frontend/
+# Copy built frontend from stage 1
+COPY --from=frontend-builder /frontend/build/ ./frontend/
 
 # Copy nginx configuration
 COPY nginx.conf /etc/nginx/sites-available/default
