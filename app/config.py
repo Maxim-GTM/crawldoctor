@@ -103,6 +103,9 @@ class Settings(BaseSettings):
     enable_metrics: bool = Field(default=True, description="Enable Prometheus metrics")
     metrics_port: int = Field(default=8001, description="Metrics server port")
 
+    # Tracker mirroring — secondary origin that the served tracker.js will also send events to
+    tracker_mirror_url: str = Field(default="", description="Secondary origin to mirror tracking events to (e.g. https://crawldoctor.up.railway.app)")
+
     # API Keys for external service access
     export_api_keys: list[str] = Field(
         default=[],

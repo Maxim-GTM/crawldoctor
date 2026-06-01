@@ -77,6 +77,7 @@ async def track_js(
             .replace("__TID__", json.dumps(tid or ""))
             .replace("__PAGE_URL__", json.dumps(page_url or ""))
             .replace("__VISIT_ID__", "null")
+            .replace("__SECONDARY_ORIGIN__", json.dumps(settings.tracker_mirror_url or ""))
         )
         
         return Response(
