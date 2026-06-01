@@ -1,4 +1,14 @@
 # Single-machine Dockerfile for CrawlDoctor (Frontend + Backend)
+
+# Stage 1: Build React frontend
+FROM node:20-slim AS frontend-builder
+WORKDIR /frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+# Stage 2: Python runtime
 FROM python:3.11-slim
 
 # Set environment variables
@@ -37,8 +47,8 @@ COPY tests/ ./tests/
 # Copy migration downgrade script
 COPY downgrade_migration.py ./
 
-# Copy built frontend
-COPY frontend/build/ ./frontend/
+# Copy built frontend from stage 1
+COPY --from=frontend-builder /frontend/build/ ./frontend/
 
 # Copy nginx configuration
 COPY nginx.conf /etc/nginx/sites-available/default
@@ -58,8 +68,8 @@ RUN chmod +x /app/docker-entrypoint.sh && chmod +x /app/reset_admin.py
 EXPOSE 8000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:${PORT:-8000}/health || exit 1
 
 # Start application
 ENTRYPOINT ["/app/docker-entrypoint.sh"]

@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 import rjsmin
 import structlog
 
+from app.config import settings
 from app.database import get_db
 from app.services.tracking import TrackingService
 from app.utils.rate_limiting import RateLimiter
@@ -141,10 +142,31 @@ async def track_event(
         client_side_data = payload.get("client_side_data")
 
         if not event_type:
-            # Ignore empty/malformed payloads to reduce noise and error logs
+            logger.debug("Dropped event: missing event_type", ip=client_ip)
             return Response(status_code=204)
 
         user_agent = request.headers.get("user-agent", "")
+
+        if settings.rabbitmq_enabled:
+            from app.mq import event_publisher
+            mq_payload = {
+                "event_type": event_type,
+                "page_url": page_url,
+                "referrer": referrer,
+                "data": data,
+                "visit_id": visit_id,
+                "tracking_id": tid,
+                "client_id": client_id,
+                "client_side_data": client_side_data,
+                "ip_address": client_ip,
+                "user_agent": user_agent,
+            }
+            try:
+                message_id = await event_publisher.publish(mq_payload)
+                return {"status": "queued", "message_id": message_id}
+            except Exception as e:
+                logger.error("MQ publish failed, falling back to direct write", error=str(e))
+                # Fall through to direct write below
 
         result = await tracking_service.track_event(
             db=db,

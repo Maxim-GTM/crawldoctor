@@ -28,13 +28,14 @@ def upgrade() -> None:
         sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=True),
     )
 
-    # Add foreign key on journey_form_fills.visit_event_id → visit_events.id
-    op.create_foreign_key(
-        'fk_journey_form_fills_visit_event_id',
-        'journey_form_fills', 'visit_events',
-        ['visit_event_id'], ['id'],
-        ondelete='SET NULL',
-    )
+    # Add FK with NOT VALID — enforces on new rows without scanning orphaned existing rows
+    op.execute("""
+        ALTER TABLE journey_form_fills
+        ADD CONSTRAINT fk_journey_form_fills_visit_event_id
+        FOREIGN KEY (visit_event_id) REFERENCES visit_events (id)
+        ON DELETE SET NULL
+        NOT VALID
+    """)
 
 
 def downgrade() -> None:

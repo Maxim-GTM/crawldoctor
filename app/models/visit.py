@@ -154,6 +154,9 @@ class VisitEvent(Base):
     medium = Column(String(100), index=True)
     campaign = Column(String(100), index=True)
 
+    # MQ idempotency key — set by publisher, prevents duplicate processing on redelivery
+    message_id = Column(String(36), unique=True, nullable=True, index=True)
+
     # Event payload — unversioned JSON. Known shapes:
     #   form_submit: {"form_values": {field: value, ...}, "filled_fields": int, "id": str, "action": str}
     #   Also seen:   {"values": {field: value, ...}} (legacy alias for form_values)

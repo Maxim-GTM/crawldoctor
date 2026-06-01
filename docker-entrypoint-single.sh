@@ -103,6 +103,10 @@ except Exception as e:
 echo "👤 Setting up default admin user..."
 python3 /app/reset_admin.py
 
+# Configure nginx to listen on $PORT (Railway injects this; default 8000)
+LISTEN_PORT=${PORT:-8000}
+sed -i "s/listen 8000;/listen ${LISTEN_PORT};/" /etc/nginx/sites-available/default
+
 echo "🐍 Starting FastAPI backend on port 8001..."
 # Start FastAPI backend on port 8001 in background with appropriate timeouts
 # Using 2 workers for better concurrency on 4-CPU machine
