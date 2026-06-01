@@ -4,7 +4,7 @@ const EmbedGuide: React.FC = () => {
   const [selectedMethod, setSelectedMethod] = useState('html');
   const [trackingId, setTrackingId] = useState('your-website');
   
-  const baseUrl = 'https://crawldoctor.fly.dev';
+  const baseUrl = window.location.origin;
   
   // Generate JavaScript tracking code (JS-only)
   const generateTrackingCode = (tid: string) => {
