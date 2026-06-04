@@ -230,22 +230,42 @@
       } catch (_) {}
     }, { passive: true });
 
-    // ---- scroll tracking (throttled 1s) ----
-    var _scrollTimer = null;
-    window.addEventListener('scroll', function () {
-      if (_scrollTimer) return;
-      _scrollTimer = setTimeout(function () {
-        _scrollTimer = null;
-        var y = window.scrollY || document.documentElement.scrollTop || 0;
-        var docH = document.documentElement.scrollHeight || 0;
-        var winH = window.innerHeight || 0;
-        sendEvent('scroll', {
-          y: y,
-          percent: docH ? Math.round((y + winH) / docH * 100) : 0,
-          tracking_method: 'javascript'
-        });
-      }, 1000);
-    }, { passive: true });
+    // ---- scroll depth milestone (50% once per page view) ----
+    var SCROLL_DEPTH_MILESTONE = 50;
+    var _scrollDepth50Sent = false;
+
+    function getScrollPercent() {
+      var y = window.scrollY || document.documentElement.scrollTop || 0;
+      var docH = document.documentElement.scrollHeight || 0;
+      var winH = window.innerHeight || 0;
+      if (!docH) return 0;
+      return Math.round((y + winH) / docH * 100);
+    }
+
+    function checkScrollDepthMilestone() {
+      if (_scrollDepth50Sent) return;
+      try {
+        var pct = getScrollPercent();
+        if (pct >= SCROLL_DEPTH_MILESTONE) {
+          _scrollDepth50Sent = true;
+          var y = window.scrollY || document.documentElement.scrollTop || 0;
+          sendEvent('scroll', {
+            y: y,
+            percent: pct,
+            milestone: SCROLL_DEPTH_MILESTONE,
+            tracking_method: 'javascript'
+          });
+        }
+      } catch (_) {}
+    }
+
+    function resetScrollMilestones() {
+      _scrollDepth50Sent = false;
+    }
+
+    window.addEventListener('scroll', checkScrollDepthMilestone, { passive: true });
+    setTimeout(checkScrollDepthMilestone, 0);
+    setTimeout(checkScrollDepthMilestone, 1000);
 
     // ---- visibility tracking ----
     document.addEventListener('visibilitychange', function () {
@@ -292,6 +312,9 @@
         if (href !== _lastHref) {
           sendEvent('navigation', { type: type, from: _lastHref, to: href, tracking_method: 'javascript' });
           _lastHref = href;
+          resetScrollMilestones();
+          setTimeout(checkScrollDepthMilestone, 0);
+          setTimeout(checkScrollDepthMilestone, 1000);
         }
       } catch (_) {}
     }
