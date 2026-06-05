@@ -98,6 +98,7 @@ class TrackingService:
                     select(VisitSession)
                     .where(VisitSession.client_id == client_id)
                     .order_by(VisitSession.last_visit.desc())
+                    .limit(1)
                 )
                 session = result.scalar_one_or_none()
                 if session:
@@ -110,6 +111,7 @@ class TrackingService:
                     VisitSession.user_agent == user_agent[:500],
                 )
                 .order_by(VisitSession.last_visit.desc())
+                .limit(1)
             )
             return result.scalar_one_or_none()
         except Exception:
@@ -134,6 +136,7 @@ class TrackingService:
                         VisitSession.first_visit >= cutoff,
                     )
                     .order_by(VisitSession.first_visit.asc())
+                    .limit(1)
                 )
             else:
                 result = await db.execute(
@@ -145,6 +148,7 @@ class TrackingService:
                         VisitSession.first_visit >= cutoff,
                     )
                     .order_by(VisitSession.first_visit.asc())
+                    .limit(1)
                 )
             older = result.scalar_one_or_none()
             if older:
@@ -372,6 +376,7 @@ class TrackingService:
                         Visit.timestamp >= cutoff_ts,
                     )
                     .order_by(Visit.timestamp.desc())
+                    .limit(1)
                 )
                 existing_visit = result.scalar_one_or_none()
         except Exception:
@@ -571,6 +576,7 @@ class TrackingService:
                         Visit.timestamp >= cutoff,
                     )
                     .order_by(Visit.timestamp.desc())
+                    .limit(1)
                 )
                 candidate = result.scalar_one_or_none()
                 if candidate:
@@ -591,7 +597,7 @@ class TrackingService:
                             Visit.ip_address == ip_address,
                             Visit.user_agent == user_agent[:1000],
                         )
-                    result = await db.execute(stmt.order_by(Visit.timestamp.desc()))
+                    result = await db.execute(stmt.order_by(Visit.timestamp.desc()).limit(1))
                     linked_visit = result.scalar_one_or_none()
                 except Exception:
                     linked_visit = None
@@ -610,6 +616,7 @@ class TrackingService:
                         VisitSession.country != "XX",
                     )
                     .order_by(VisitSession.last_visit.desc())
+                    .limit(1)
                 )
                 good_session = result.scalar_one_or_none()
                 if good_session:
@@ -629,6 +636,7 @@ class TrackingService:
                             Visit.country != "XX",
                         )
                         .order_by(Visit.timestamp.desc())
+                        .limit(1)
                     )
                     good_visit = result.scalar_one_or_none()
                     if good_visit:
@@ -674,6 +682,7 @@ class TrackingService:
                             Visit.country != "XX",
                         )
                         .order_by(Visit.timestamp.desc())
+                        .limit(1)
                     )
                     good_visit = result.scalar_one_or_none()
                     if good_visit:
@@ -690,6 +699,7 @@ class TrackingService:
                                 VisitSession.country != "XX",
                             )
                             .order_by(VisitSession.last_visit.desc())
+                            .limit(1)
                         )
                         good_session = result.scalar_one_or_none()
                         if good_session:
@@ -733,15 +743,14 @@ class TrackingService:
                     query_params=page_info.get("query_params", {})
                 )
                 db.add(new_visit)
-                await db.commit()
-                await db.refresh(new_visit)
-                linked_visit = new_visit
                 try:
                     session_row.visit_count = (session_row.visit_count or 0) + 1
                     db.add(session_row)
-                    await db.commit()
                 except Exception:
-                    await db.rollback()
+                    pass
+                await db.commit()
+                await db.refresh(new_visit)
+                linked_visit = new_visit
             except Exception:
                 await db.rollback()
 
