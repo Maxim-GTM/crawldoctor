@@ -500,6 +500,7 @@ class TrackingService:
         client_id: Optional[str] = None,
         client_side_data: Optional[Dict[str, Any]] = None,
         message_id: Optional[str] = None,
+        occurred_at: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Track fine-grained events like scroll, click, navigation."""
         if event_type == 'form_submit' and data:
@@ -1029,6 +1030,11 @@ class TrackingService:
             "client_side_connection_type": client_side_data.get('connection_type') if client_side_data else None,
             "message_id": message_id,
         }
+        if occurred_at:
+            try:
+                event_payload["timestamp"] = datetime.fromisoformat(occurred_at)
+            except (ValueError, TypeError):
+                pass
 
         event_id = None
         queued = False

@@ -112,6 +112,7 @@ class CoreConsumer:
                     client_id=payload.get("client_id"),
                     client_side_data=payload.get("client_side_data"),
                     message_id=message_id,
+                    occurred_at=payload.get("received_at"),
                 )
                 logger.debug(
                     "CoreConsumer processed event",
