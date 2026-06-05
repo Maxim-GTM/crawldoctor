@@ -69,9 +69,15 @@ class CoreConsumer:
                 message_id=message.message_id,
                 error=str(exc),
             )
-            await self._handle_failure(message, exc)
+            handled = await self._handle_failure(message, exc)
             try:
-                await message.nack(requeue=False)
+                # Ack if we successfully re-published or DLQ'd the message — this
+                # prevents the queue's x-dead-letter-exchange from also routing the
+                # nack'd original to the DLQ (which would double-count every failure).
+                if handled:
+                    await message.ack()
+                else:
+                    await message.nack(requeue=False)
             except Exception:
                 pass  # already acked/nacked
 
@@ -148,7 +154,9 @@ class CoreConsumer:
 
     async def _handle_failure(
         self, message: aio_pika.IncomingMessage, exc: Exception
-    ) -> None:
+    ) -> bool:
+        """Re-queue for retry or route to DLQ. Returns True if the message was
+        successfully placed somewhere (caller should ack the original)."""
         headers = dict(message.headers or {})
         retry_count = int(headers.get("x-retry-count", 0))
 
@@ -172,8 +180,10 @@ class CoreConsumer:
                     attempt=retry_count + 1,
                     max=settings.rabbitmq_max_retries,
                 )
+                return True
             except Exception as publish_exc:
                 logger.error("Failed to republish for retry", error=str(publish_exc))
+                return False
         else:
             headers["x-failure-reason"] = str(exc)
             try:
@@ -193,5 +203,7 @@ class CoreConsumer:
                     message_id=message.message_id,
                     retries=retry_count,
                 )
+                return True
             except Exception as dlq_exc:
                 logger.error("Failed to publish to DLQ", error=str(dlq_exc))
+                return False
