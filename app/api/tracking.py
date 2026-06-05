@@ -4,12 +4,12 @@ from pathlib import Path
 from typing import Optional
 import json
 from fastapi import APIRouter, Request, Response, Depends, Query, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 import rjsmin
 import structlog
 
 from app.config import settings
-from app.database import get_db
+from app.database import get_async_db
 from app.services.tracking import TrackingService
 from app.utils.rate_limiting import RateLimiter
 
@@ -116,7 +116,7 @@ async def track_json(
 @router.post("/event")
 async def track_event(
     request: Request,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     tid: Optional[str] = Query(None, description="Tracking ID")
 ):
     """Record granular client-side events (click, scroll, navigation, etc.)."""
