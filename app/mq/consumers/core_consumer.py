@@ -76,14 +76,22 @@ class CoreConsumer:
                 pass  # already acked/nacked
 
     async def _process(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        from app.models.visit import VisitEvent
+        from sqlalchemy import select
         message_id: Optional[str] = payload.get("message_id")
 
-        # Idempotency check — skip if already written to DB
-        if message_id and await self._already_processed(message_id):
-            logger.info("Skipping duplicate message", message_id=message_id)
-            return {}
-
         async with AsyncSessionLocal() as db:
+            if message_id:
+                try:
+                    result = await db.execute(
+                        select(VisitEvent.id).where(VisitEvent.message_id == message_id)
+                    )
+                    if result.scalar_one_or_none() is not None:
+                        logger.info("Skipping duplicate message", message_id=message_id)
+                        return {}
+                except Exception:
+                    pass
+
             try:
                 result = await tracking_service.track_event(
                     db=db,
@@ -109,18 +117,6 @@ class CoreConsumer:
             except Exception:
                 await db.rollback()
                 raise
-
-    async def _already_processed(self, message_id: str) -> bool:
-        from app.models.visit import VisitEvent
-        from sqlalchemy import select
-        try:
-            async with AsyncSessionLocal() as db:
-                result = await db.execute(
-                    select(VisitEvent.id).where(VisitEvent.message_id == message_id)
-                )
-                return result.scalar_one_or_none() is not None
-        except Exception:
-            return False
 
     async def _publish_enrichment(
         self,

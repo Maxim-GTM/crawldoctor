@@ -21,7 +21,11 @@ def _make_async_url(sync_url: str) -> tuple:
     p = urlparse(sync_url)
     params = {k: v[0] for k, v in parse_qs(p.query).items()}
     sslmode = params.pop("sslmode", None)
-    connect_args = {"connect_timeout": 30}
+    # Strip all libpq-specific query params — asyncpg doesn't understand them
+    for key in list(params.keys()):
+        params.pop(key)
+    # asyncpg uses 'timeout', not psycopg2's 'connect_timeout'
+    connect_args = {"timeout": 30}
     if sslmode in ("require", "verify-ca", "verify-full"):
         connect_args["ssl"] = True
     scheme = p.scheme
@@ -29,8 +33,7 @@ def _make_async_url(sync_url: str) -> tuple:
         scheme = "postgresql+asyncpg"
     else:
         scheme = scheme.replace("psycopg2", "asyncpg")
-    new_query = urlencode(params) if params else ""
-    return urlunparse(p._replace(scheme=scheme, query=new_query)), connect_args
+    return urlunparse(p._replace(scheme=scheme, query="")), connect_args
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +91,14 @@ AsyncSessionLocal = async_sessionmaker(
     class_=AsyncSession,
     expire_on_commit=False,
 )
+
+# asyncpg's DBAPI bridge runs through SQLAlchemy's greenlet mechanism, so the
+# sync cursor.execute() call here is safe even though the engine is async.
+@event.listens_for(async_engine.sync_engine, "connect")
+def _set_async_statement_timeout(dbapi_conn, connection_record):
+    cursor = dbapi_conn.cursor()
+    cursor.execute(f"SET statement_timeout = {settings.database_statement_timeout}")
+    cursor.close()
 
 
 # ---------------------------------------------------------------------------
