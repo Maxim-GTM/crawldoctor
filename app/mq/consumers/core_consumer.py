@@ -14,10 +14,9 @@ from typing import Any, Dict, Optional
 
 import aio_pika
 import structlog
-from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.database import SessionLocal
+from app.database import AsyncSessionLocal
 from app.mq.connection import MQConnection
 from app.mq.topology import (
     EXCHANGE_EVENTS,
@@ -84,46 +83,44 @@ class CoreConsumer:
             logger.info("Skipping duplicate message", message_id=message_id)
             return {}
 
-        db: Session = SessionLocal()
-        try:
-            result = await tracking_service.track_event(
-                db=db,
-                ip_address=payload["ip_address"],
-                user_agent=payload["user_agent"],
-                event_type=payload["event_type"],
-                page_url=payload.get("page_url"),
-                referrer=payload.get("referrer"),
-                data=payload.get("data"),
-                visit_id=payload.get("visit_id"),
-                tracking_id=payload.get("tracking_id"),
-                client_id=payload.get("client_id"),
-                client_side_data=payload.get("client_side_data"),
-                message_id=message_id,
-            )
-            logger.debug(
-                "CoreConsumer processed event",
-                message_id=message_id,
-                event_type=payload.get("event_type"),
-                event_id=result.get("event_id"),
-            )
-            return result
-        except Exception:
-            db.rollback()
-            raise
-        finally:
-            db.close()
+        async with AsyncSessionLocal() as db:
+            try:
+                result = await tracking_service.track_event(
+                    db=db,
+                    ip_address=payload["ip_address"],
+                    user_agent=payload["user_agent"],
+                    event_type=payload["event_type"],
+                    page_url=payload.get("page_url"),
+                    referrer=payload.get("referrer"),
+                    data=payload.get("data"),
+                    visit_id=payload.get("visit_id"),
+                    tracking_id=payload.get("tracking_id"),
+                    client_id=payload.get("client_id"),
+                    client_side_data=payload.get("client_side_data"),
+                    message_id=message_id,
+                )
+                logger.debug(
+                    "CoreConsumer processed event",
+                    message_id=message_id,
+                    event_type=payload.get("event_type"),
+                    event_id=result.get("event_id"),
+                )
+                return result
+            except Exception:
+                await db.rollback()
+                raise
 
     async def _already_processed(self, message_id: str) -> bool:
         from app.models.visit import VisitEvent
-        db: Session = SessionLocal()
+        from sqlalchemy import select
         try:
-            return db.query(VisitEvent.id).filter(
-                VisitEvent.message_id == message_id
-            ).first() is not None
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    select(VisitEvent.id).where(VisitEvent.message_id == message_id)
+                )
+                return result.scalar_one_or_none() is not None
         except Exception:
             return False
-        finally:
-            db.close()
 
     async def _publish_enrichment(
         self,
