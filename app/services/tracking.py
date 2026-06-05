@@ -8,6 +8,7 @@ from urllib.parse import urlparse, parse_qs
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import object_session
 import structlog
 
@@ -663,7 +664,15 @@ class TrackingService:
                 is_external_entry=True,
             )
             db.add(session_row)
-            await db.flush()
+            try:
+                await db.flush()
+            except IntegrityError:
+                # Another concurrent worker inserted the same session — re-fetch it
+                await db.rollback()
+                result = await db.execute(
+                    select(VisitSession).where(VisitSession.id == effective_session_id)
+                )
+                session_row = result.scalar_one_or_none()
 
         if not linked_visit and page_url:
             try:
@@ -1026,7 +1035,6 @@ class TrackingService:
         is_real_form = client_id and event_type == "form_submit" and is_real_form_submit(enriched_data)
 
         if is_real_form:
-            from sqlalchemy.exc import IntegrityError
             try:
                 event = VisitEvent(**event_payload)
                 db.add(event)
