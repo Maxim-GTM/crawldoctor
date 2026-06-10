@@ -123,6 +123,21 @@ async def track_event(
     try:
         client_ip = _get_client_ip(request)
         if not await rate_limiter.is_allowed(client_ip, "event_track"):
+            # Never drop a form_submit silently — log the full payload so the
+            # lead is recoverable from logs even when rate limited.
+            try:
+                body = await request.body()
+                dropped = json.loads(body.decode("utf-8") or "{}")
+                if dropped.get("event_type") == "form_submit":
+                    logger.warning(
+                        "Rate-limited form_submit dropped",
+                        ip=client_ip,
+                        cid=dropped.get("cid"),
+                        page_url=dropped.get("page_url"),
+                        data=dropped.get("data"),
+                    )
+            except Exception:
+                pass
             return Response(content="Rate limited", status_code=429)
 
         # Support both JSON and text/plain bodies
