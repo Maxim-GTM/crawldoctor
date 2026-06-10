@@ -109,13 +109,18 @@ AsyncSessionLocal = async_sessionmaker(
     expire_on_commit=False,
 )
 
-# asyncpg's DBAPI bridge runs through SQLAlchemy's greenlet mechanism, so the
-# sync cursor.execute() call here is safe even though the engine is async.
+# Set statement_timeout after connect (Neon's pooler rejects it in the startup
+# packet, so we can't use a libpq 'options' arg). psycopg3 isn't autocommit, so
+# the SET opens a transaction — commit it so the connection isn't left INTRANS
+# (which breaks SQLAlchemy's isolation_level setup -> "can't change autocommit
+# now") and so the SET persists (SET is transactional). Runs through SQLAlchemy's
+# greenlet bridge, so the sync cursor/commit calls are safe on the async engine.
 @event.listens_for(async_engine.sync_engine, "connect")
 def _set_async_statement_timeout(dbapi_conn, connection_record):
     cursor = dbapi_conn.cursor()
     cursor.execute(f"SET statement_timeout = {settings.database_statement_timeout}")
     cursor.close()
+    dbapi_conn.commit()
 
 
 # ---------------------------------------------------------------------------
