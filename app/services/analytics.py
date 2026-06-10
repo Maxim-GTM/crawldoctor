@@ -104,10 +104,10 @@ DEFAULT_FUNNEL_CONFIG = {
         },
         {
             "key": "bifrost_enterprise",
-            "label": "Any Page → /bifrost/enterprise → Form Submit",
+            "label": "Any Bifrost Page → Enterprise Trial Form Submit",
             "steps": [
-                {"label": "Visited /bifrost/enterprise", "type": "page", "path": "/bifrost/enterprise"},
-                {"label": "Submitted form", "type": "event", "path": "/bifrost/enterprise", "event_type": "form_submit"},
+                {"label": "Visited Bifrost page", "type": "page", "path": "/bifrost/"},
+                {"label": "Submitted Enterprise Trial form", "type": "event", "path": "/bifrost/", "event_type": "form_submit"},
             ],
         },
     ]
