@@ -202,8 +202,21 @@ async def track_event(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Event tracking failed", error=str(e))
-        return {"status": "error", "message": str(e)}
+        # Some driver/connection errors (e.g. asyncpg ConnectionResetError)
+        # stringify to "" — log the type too so failures are never invisible.
+        logger.error(
+            "Event tracking failed",
+            error=str(e) or repr(e),
+            error_type=type(e).__name__,
+        )
+        # Return 5xx (not 200) so the tracker's form_submit path retries and
+        # persists the lead for replay instead of silently dropping it. Other
+        # events use sendBeacon and ignore the status, so they're unaffected.
+        return Response(
+            content=json.dumps({"status": "error", "message": str(e) or type(e).__name__}),
+            media_type="application/json",
+            status_code=503,
+        )
 
 
 @router.get("/status")
