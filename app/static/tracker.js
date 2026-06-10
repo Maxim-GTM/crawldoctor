@@ -250,9 +250,11 @@
         var url = apiOrigin + '/track/event?tid=' + encodeURIComponent(trackingId || '');
         var body = JSON.stringify(payload);
 
-        if (secondaryOrigin) {
-          _mirrorEvent(secondaryOrigin + '/track/event?tid=' + encodeURIComponent(trackingId || ''), body);
-        }
+        // Disabled: double-sending (mirroring) tracking events to the secondary
+        // origin (Railway). Kept for reference — re-enable to restore mirroring.
+        // if (secondaryOrigin) {
+        //   _mirrorEvent(secondaryOrigin + '/track/event?tid=' + encodeURIComponent(trackingId || ''), body);
+        // }
 
         // form_submit is the highest-value event: deliver via fetch with
         // retries so transient network errors / 5xx don't lose the lead.
