@@ -167,11 +167,74 @@
       } catch (_) {}
     }
 
+    // ---- failed form_submit persistence (recovery on next page load) ----
+    var FAILED_EVENTS_KEY = 'cd_failed_form_submits';
+    var FAILED_EVENTS_MAX = 20;
+
+    function _persistFailedEvent(body) {
+      try {
+        var raw = storageGet(localStore, FAILED_EVENTS_KEY);
+        var queue = [];
+        try { queue = raw ? JSON.parse(raw) : []; } catch (_) { queue = []; }
+        if (!Array.isArray(queue)) queue = [];
+        while (queue.length >= FAILED_EVENTS_MAX) queue.shift();
+        queue.push({ body: body, failed_at: Date.now() });
+        storageSet(localStore, FAILED_EVENTS_KEY, JSON.stringify(queue));
+      } catch (_) {}
+    }
+
+    function _flushFailedEvents() {
+      try {
+        var raw = storageGet(localStore, FAILED_EVENTS_KEY);
+        if (!raw) return;
+        var queue = [];
+        try { queue = JSON.parse(raw); } catch (_) { return; }
+        if (!Array.isArray(queue) || !queue.length) return;
+        try { localStore.removeItem(FAILED_EVENTS_KEY); } catch (_) {}
+        var url = apiOrigin + '/track/event?tid=' + encodeURIComponent(trackingId || '');
+        for (var i = 0; i < queue.length; i++) {
+          if (queue[i] && queue[i].body) _sendWithRetry(url, queue[i].body, 0);
+        }
+      } catch (_) {}
+    }
+
+    // ---- priority delivery (fetch with retries, beacon as last resort) ----
+    var PRIORITY_MAX_RETRIES = 2;
+    function _sendWithRetry(url, body, attempt) {
+      try {
+        fetch(url, { method: 'POST', body: body, headers: {'Content-Type': 'text/plain'}, keepalive: true })
+          .then(function (res) {
+            if (!res || res.ok) return;
+            if (res.status >= 500 && attempt < PRIORITY_MAX_RETRIES) {
+              setTimeout(function () { _sendWithRetry(url, body, attempt + 1); }, 500 * (attempt + 1));
+            } else {
+              // 4xx (e.g. rate limited) or 5xx retries exhausted — persist for
+              // recovery on next page load.
+              _persistFailedEvent(body);
+            }
+          })
+          .catch(function () {
+            if (attempt < PRIORITY_MAX_RETRIES) {
+              setTimeout(function () { _sendWithRetry(url, body, attempt + 1); }, 500 * (attempt + 1));
+            } else {
+              var queued = false;
+              if (navigator.sendBeacon) {
+                try { queued = navigator.sendBeacon(url, body); } catch (_) {}
+              }
+              if (!queued) _persistFailedEvent(body);
+            }
+          });
+      } catch (_) {
+        var queued = false;
+        if (navigator.sendBeacon) {
+          try { queued = navigator.sendBeacon(url, body); } catch (_) {}
+        }
+        if (!queued) _persistFailedEvent(body);
+      }
+    }
+
     // ---- event sender ----
-    var _sending = false;
     function sendEvent(eventType, data) {
-      if (_sending) return;
-      _sending = true;
       try {
         var payload = {
           event_type: eventType,
@@ -187,20 +250,29 @@
         var url = apiOrigin + '/track/event?tid=' + encodeURIComponent(trackingId || '');
         var body = JSON.stringify(payload);
 
-        if (secondaryOrigin) {
-          _mirrorEvent(secondaryOrigin + '/track/event?tid=' + encodeURIComponent(trackingId || ''), body);
+        // Disabled: double-sending (mirroring) tracking events to the secondary
+        // origin (Railway). Kept for reference — re-enable to restore mirroring.
+        // if (secondaryOrigin) {
+        //   _mirrorEvent(secondaryOrigin + '/track/event?tid=' + encodeURIComponent(trackingId || ''), body);
+        // }
+
+        // form_submit is the highest-value event: deliver via fetch with
+        // retries so transient network errors / 5xx don't lose the lead.
+        if (eventType === 'form_submit' && window.fetch) {
+          _sendWithRetry(url, body, 0);
+          return;
         }
 
         if (navigator.sendBeacon) {
-          try { if (navigator.sendBeacon(url, body)) { _sending = false; return; } } catch (_) {}
+          try { if (navigator.sendBeacon(url, body)) { return; } } catch (_) {}
         }
         if (window.fetch) {
           try {
             fetch(url, { method: 'POST', body: body, headers: {'Content-Type': 'text/plain'}, keepalive: true })
-              .catch(function(){}).finally(function(){ _sending = false; });
-          } catch (_) { _sending = false; }
-        } else { _sending = false; }
-      } catch (_) { _sending = false; }
+              .catch(function(){});
+          } catch (_) {}
+        }
+      } catch (_) {}
     }
 
     // ---- page view (single-fire per pathname+search) ----
@@ -213,6 +285,9 @@
         cid: cid
       });
     }
+
+    // ---- replay form_submits that failed to send on a previous page ----
+    setTimeout(_flushFailedEvents, 2000);
 
     // ---- click tracking ----
     document.addEventListener('click', function (evt) {
@@ -230,22 +305,42 @@
       } catch (_) {}
     }, { passive: true });
 
-    // ---- scroll tracking (throttled 1s) ----
-    var _scrollTimer = null;
-    window.addEventListener('scroll', function () {
-      if (_scrollTimer) return;
-      _scrollTimer = setTimeout(function () {
-        _scrollTimer = null;
-        var y = window.scrollY || document.documentElement.scrollTop || 0;
-        var docH = document.documentElement.scrollHeight || 0;
-        var winH = window.innerHeight || 0;
-        sendEvent('scroll', {
-          y: y,
-          percent: docH ? Math.round((y + winH) / docH * 100) : 0,
-          tracking_method: 'javascript'
-        });
-      }, 1000);
-    }, { passive: true });
+    // ---- scroll depth milestone (50% once per page view) ----
+    var SCROLL_DEPTH_MILESTONE = 50;
+    var _scrollDepth50Sent = false;
+
+    function getScrollPercent() {
+      var y = window.scrollY || document.documentElement.scrollTop || 0;
+      var docH = document.documentElement.scrollHeight || 0;
+      var winH = window.innerHeight || 0;
+      if (!docH) return 0;
+      return Math.round((y + winH) / docH * 100);
+    }
+
+    function checkScrollDepthMilestone() {
+      if (_scrollDepth50Sent) return;
+      try {
+        var pct = getScrollPercent();
+        if (pct >= SCROLL_DEPTH_MILESTONE) {
+          _scrollDepth50Sent = true;
+          var y = window.scrollY || document.documentElement.scrollTop || 0;
+          sendEvent('scroll', {
+            y: y,
+            percent: pct,
+            milestone: SCROLL_DEPTH_MILESTONE,
+            tracking_method: 'javascript'
+          });
+        }
+      } catch (_) {}
+    }
+
+    function resetScrollMilestones() {
+      _scrollDepth50Sent = false;
+    }
+
+    window.addEventListener('scroll', checkScrollDepthMilestone, { passive: true });
+    setTimeout(checkScrollDepthMilestone, 0);
+    setTimeout(checkScrollDepthMilestone, 1000);
 
     // ---- visibility tracking ----
     document.addEventListener('visibilitychange', function () {
@@ -292,6 +387,9 @@
         if (href !== _lastHref) {
           sendEvent('navigation', { type: type, from: _lastHref, to: href, tracking_method: 'javascript' });
           _lastHref = href;
+          resetScrollMilestones();
+          setTimeout(checkScrollDepthMilestone, 0);
+          setTimeout(checkScrollDepthMilestone, 1000);
         }
       } catch (_) {}
     }
@@ -429,6 +527,7 @@
     // ---- network intercept for external form APIs ----
     var INTERCEPT_RULES = [
       { pattern: /^https:\/\/app\.getmaxim\.ai\/api\//, pathContains: '/sign-up', method: 'POST' },
+      { pattern: /^https:\/\/(www\.)?getmaxim\.ai\/bifrost\/api\/enterprise-trial/, method: 'POST' },
       { pattern: /^https:\/\/(www\.)?getmaxim\.ai\/api\//, pathContains: ['/bifrost/book-a-demo', '/bifrost/enterprise'], method: 'POST' },
       { pattern: /^https:\/\/api\.cal\.com\//, pathContains: ['/demo', '/schedule', '/bifrost/book-a-demo', '/bifrost/enterprise'], method: 'POST' }
     ];

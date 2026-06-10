@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse, HTMLResponse
 from starlette.datastructures import MutableHeaders
 from starlette.types import ASGIApp, Receive, Scope, Send
 import structlog
+import logging
 from pathlib import Path
 import time
 
@@ -19,6 +20,13 @@ from app.services.auth import AuthService
 from app.services.event_batcher import event_batcher
 from app.background import job_runner, job_scheduler
 
+
+# Configure stdlib root logger so structlog's filter_by_level and third-party
+# libraries (aio_pika, sqlalchemy, etc.) emit at the right level.
+logging.basicConfig(
+    level=logging.DEBUG if settings.debug else logging.INFO,
+    format="%(message)s",
+)
 
 # Configure structured logging
 structlog.configure(

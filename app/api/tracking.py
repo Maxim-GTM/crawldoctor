@@ -4,12 +4,12 @@ from pathlib import Path
 from typing import Optional
 import json
 from fastapi import APIRouter, Request, Response, Depends, Query, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 import rjsmin
 import structlog
 
 from app.config import settings
-from app.database import get_db
+from app.database import get_async_db
 from app.services.tracking import TrackingService
 from app.utils.rate_limiting import RateLimiter
 
@@ -116,13 +116,28 @@ async def track_json(
 @router.post("/event")
 async def track_event(
     request: Request,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_async_db),
     tid: Optional[str] = Query(None, description="Tracking ID")
 ):
     """Record granular client-side events (click, scroll, navigation, etc.)."""
     try:
         client_ip = _get_client_ip(request)
         if not await rate_limiter.is_allowed(client_ip, "event_track"):
+            # Never drop a form_submit silently — log the full payload so the
+            # lead is recoverable from logs even when rate limited.
+            try:
+                body = await request.body()
+                dropped = json.loads(body.decode("utf-8") or "{}")
+                if dropped.get("event_type") == "form_submit":
+                    logger.warning(
+                        "Rate-limited form_submit dropped",
+                        ip=client_ip,
+                        cid=dropped.get("cid"),
+                        page_url=dropped.get("page_url"),
+                        data=dropped.get("data"),
+                    )
+            except Exception:
+                pass
             return Response(content="Rate limited", status_code=429)
 
         # Support both JSON and text/plain bodies

@@ -70,17 +70,18 @@ def _psql(url: str, sql: str, capture: bool = False) -> str | None:
     return result.stdout if capture else None
 
 
-def dump(source_url: str, days: int, out_path: str, since: str | None = None) -> None:
+def dump(source_url: str, days: int, out_path: str, since: str | None = None, until: str | None = None) -> None:
     """Dump the last `days` of data from source into a SQL file.
 
     If `since` is provided (ISO timestamp), it overrides `days`.
+    If `until` is provided, only rows with timestamp < until are included.
     """
     if since:
         cutoff = since
-        print(f"Dumping since {cutoff} to {out_path}")
+        print(f"Dumping since {cutoff}{f' until {until}' if until else ''} to {out_path}")
     else:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S+00")
-        print(f"Dumping last {days} days (since {cutoff}) to {out_path}")
+        print(f"Dumping last {days} days (since {cutoff}{f' until {until}' if until else ''}) to {out_path}")
 
     with open(out_path, "w") as f:
         # Header
@@ -103,10 +104,15 @@ def dump(source_url: str, days: int, out_path: str, since: str | None = None) ->
         elif table in DATE_FILTERED_TABLES:
             ts_col = DATE_FILTERED_TABLES[table]
             where_clause = f"WHERE {ts_col} >= '{cutoff}'"
+            if until:
+                where_clause += f" AND {ts_col} < '{until}'"
         elif table in SUMMARY_TABLES:
+            visits_range = f"timestamp >= '{cutoff}'"
+            if until:
+                visits_range += f" AND timestamp < '{until}'"
             where_clause = (
                 f"WHERE client_id IN ("
-                f"SELECT DISTINCT client_id FROM visits WHERE timestamp >= '{cutoff}' AND client_id IS NOT NULL"
+                f"SELECT DISTINCT client_id FROM visits WHERE {visits_range} AND client_id IS NOT NULL"
                 f")"
             )
         else:
@@ -420,6 +426,7 @@ def main():
                         help="Prod database URL (default: $CRAWLDOCTOR_DATABASE_URL)")
     p_dump.add_argument("--days", type=int, default=15, help="Number of days to include (default: 15)")
     p_dump.add_argument("--since", default=None, help="Absolute UTC cutoff timestamp (overrides --days), e.g. '2026-04-02 01:10:00+00'")
+    p_dump.add_argument("--until", default=None, help="Exclusive upper bound UTC timestamp, e.g. '2026-06-09 00:00:00+00'")
     p_dump.add_argument("--out", default="staging_data.sql", help="Output file path")
 
     # -- load --
@@ -447,7 +454,7 @@ def main():
     if args.command == "dump":
         if not args.source_url:
             parser.error("--source-url required (or set CRAWLDOCTOR_DATABASE_URL)")
-        dump(args.source_url, args.days, args.out, since=args.since)
+        dump(args.source_url, args.days, args.out, since=args.since, until=args.until)
 
     elif args.command == "load":
         if not args.target_url:
