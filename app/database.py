@@ -17,23 +17,40 @@ logger = structlog.get_logger()
 
 
 def _make_async_url(sync_url: str) -> tuple:
-    """Convert a psycopg2/libpq URL to asyncpg format, extracting SSL settings."""
+    """Build the async engine URL + connect_args for the configured async driver.
+
+    Default driver is psycopg3 (libpq-based): its connection handshake matches
+    the sync psycopg2 engine, so it works both against Neon and through Fly's
+    Postgres proxy.  asyncpg uses a pure-Python wire protocol that Fly's proxy
+    rejects (PP03 tls/tcp-backhaul -> ConnectionResetError), silently breaking
+    all tracking writes; it remains opt-in via CRAWLDOCTOR_DATABASE_ASYNC_DRIVER
+    for environments (e.g. direct-to-Neon) that prefer it.
+    """
+    driver = (settings.database_async_driver or "psycopg").strip().lower()
     p = urlparse(sync_url)
-    params = {k: v[0] for k, v in parse_qs(p.query).items()}
-    sslmode = params.pop("sslmode", None)
-    # Strip all libpq-specific query params — asyncpg doesn't understand them
-    for key in list(params.keys()):
-        params.pop(key)
-    # asyncpg uses 'timeout', not psycopg2's 'connect_timeout'
-    connect_args = {"timeout": 30}
-    if sslmode in ("require", "verify-ca", "verify-full"):
-        connect_args["ssl"] = True
+
+    if driver == "asyncpg":
+        params = {k: v[0] for k, v in parse_qs(p.query).items()}
+        sslmode = params.get("sslmode")
+        # asyncpg uses 'timeout', not psycopg2's 'connect_timeout', and doesn't
+        # understand libpq query params — strip them and translate sslmode -> ssl.
+        connect_args = {"timeout": 30}
+        if sslmode in ("require", "verify-ca", "verify-full"):
+            connect_args["ssl"] = True
+        scheme = p.scheme
+        if scheme in ("postgresql", "postgres"):
+            scheme = "postgresql+asyncpg"
+        else:
+            scheme = scheme.replace("psycopg2", "asyncpg")
+        return urlunparse(p._replace(scheme=scheme, query="")), connect_args
+
+    # psycopg3 (libpq) — keep the libpq query params (sslmode, etc.) intact.
     scheme = p.scheme
     if scheme in ("postgresql", "postgres"):
-        scheme = "postgresql+asyncpg"
+        scheme = "postgresql+psycopg"
     else:
-        scheme = scheme.replace("psycopg2", "asyncpg")
-    return urlunparse(p._replace(scheme=scheme, query="")), connect_args
+        scheme = scheme.replace("psycopg2", "psycopg")
+    return urlunparse(p._replace(scheme=scheme)), {"connect_timeout": 30}
 
 
 # ---------------------------------------------------------------------------

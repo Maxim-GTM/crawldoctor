@@ -25,4 +25,8 @@ email-validator==2.1.0
 rjsmin==1.2.1
 APScheduler==3.10.4
 aio-pika>=9.0.0
+# Async DB drivers. psycopg3 is the default (libpq-based handshake works through
+# Fly's Postgres proxy, which resets asyncpg's pure-Python wire protocol).
+# asyncpg is kept as an opt-in alternative (CRAWLDOCTOR_DATABASE_ASYNC_DRIVER=asyncpg).
+psycopg[binary]>=3.1
 asyncpg>=0.29.0

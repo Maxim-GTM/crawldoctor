@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     )
     database_pool_size: int = Field(default=30, description="Database pool size")
     database_max_overflow: int = Field(default=20, description="Database max overflow")
+    database_async_driver: str = Field(
+        default="psycopg",
+        description="Async DB driver: 'psycopg' (psycopg3/libpq — works through Fly's PG proxy) or 'asyncpg'",
+    )
     database_statement_timeout: int = Field(default=30000, description="Statement timeout in milliseconds (30 seconds)")
     database_pool_timeout: int = Field(default=60, description="Connection pool timeout in seconds")
     
