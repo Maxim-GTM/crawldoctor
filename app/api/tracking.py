@@ -161,6 +161,14 @@ async def track_event(
             logger.debug("Dropped event: missing event_type", ip=client_ip)
             return Response(status_code=204)
 
+        # Privacy: we no longer ingest per-keystroke form_input events. They
+        # carry raw field values (PII) and are redundant — form_submit already
+        # captures the meaningful conversion data. Drop at ingestion so that
+        # trackers already deployed/cached on customer sites stop populating the
+        # DB without needing an update on those sites.
+        if event_type == "form_input":
+            return Response(status_code=204)
+
         user_agent = request.headers.get("user-agent", "")
 
         if settings.rabbitmq_enabled:

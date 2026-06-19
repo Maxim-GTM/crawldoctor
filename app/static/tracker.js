@@ -447,23 +447,6 @@
       return false;
     }
 
-    // ---- form input tracking ----
-    var _lastFieldValues = {};
-    function trackFormField(el) {
-      try {
-        if (!el) return;
-        var type = (el.getAttribute('type') || el.tagName || '').toLowerCase();
-        if (shouldSkipField(el, type)) return;
-        var name = el.name || el.id || el.getAttribute('placeholder') || el.getAttribute('aria-label') || 'unnamed';
-        var val = (type === 'checkbox' || type === 'radio') ? (el.checked ? '1' : '0') : (el.value || '').trim();
-        if (!val || val === _lastFieldValues[name]) return;
-        _lastFieldValues[name] = val;
-        var sanitized = sanitizeValue(val, 0, name, type);
-        if (sanitized.value === null) return;
-        sendEvent('form_input', { field_name: name, field_type: type, field_value: sanitized.value, tracking_method: 'javascript' });
-      } catch (_) {}
-    }
-
     // ---- form submit tracking ----
     function trackFormSubmit(form) {
       try {
@@ -501,14 +484,6 @@
     }
 
     // ---- DOM event listeners for forms ----
-    document.addEventListener('blur', function (e) {
-      var t = e.target;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) trackFormField(t);
-    }, true);
-    document.addEventListener('change', function (e) {
-      var t = e.target;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) trackFormField(t);
-    }, true);
     document.addEventListener('submit', function (e) {
       try { trackFormSubmit(e.target); } catch (_) {}
     }, true);
