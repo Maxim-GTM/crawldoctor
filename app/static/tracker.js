@@ -8,7 +8,6 @@
  *   __TID__              – tracking ID (string literal or "")
  *   __PAGE_URL__         – initial page URL (string literal or "")
  *   __VISIT_ID__         – server-side visit id (number literal or null)
- *   __SECONDARY_ORIGIN__ – optional mirror origin (string literal or "")
  */
 !(function () {
   try {
@@ -36,7 +35,6 @@
     var trackingId      = __TID__;
     var _pageUrl        = __PAGE_URL__;  // consumed by comma expr below
     var visitId         = __VISIT_ID__;
-    var secondaryOrigin = __SECONDARY_ORIGIN__;
 
     // ---- determine script origin (for beacon URL) ----
     var scriptSrc = (function () {
@@ -75,14 +73,27 @@
     var cidStorageKey = 'cd_cid_' + (trackingId || rootDomain);
     var cid = null;
 
-    // 1. Check URL param (cross-domain hand-off)
+    // 1. Cross-domain hand-off: read the cid from the URL query, then fall back
+    //    to the URL fragment.  Server redirects (307/308/301) that rebuild the
+    //    Location header drop the ?query, but the browser re-attaches the
+    //    original #fragment onto the redirect target — so #__cdid survives the
+    //    apex / bare-root redirects that strip ?cd_cid.
     try {
-      var params = new URLSearchParams(window.location.search);
-      if (params.has('cd_cid')) {
-        cid = params.get('cd_cid');
-        params.delete('cd_cid');
-        var cleanQs = params.toString();
-        var cleanUrl = window.location.pathname + (cleanQs ? '?' + cleanQs : '') + window.location.hash;
+      var loc = window.location;
+      var qs = new URLSearchParams(loc.search);
+      var rawHash = (loc.hash || '').replace(/^#/, '');
+      var hasHashTok = /(^|&)__cdid=/.test(rawHash);
+      if (qs.has('cd_cid') || hasHashTok) {
+        cid = qs.get('cd_cid');
+        if (!cid && hasHashTok) {
+          var hp = new URLSearchParams(rawHash);
+          cid = hp.get('__cdid');
+          hp.delete('__cdid');
+          rawHash = hp.toString(); // only rewrite the hash when OUR token was in it
+        }
+        qs.delete('cd_cid');
+        var cleanQs = qs.toString();
+        var cleanUrl = loc.pathname + (cleanQs ? '?' + cleanQs : '') + (rawHash ? '#' + rawHash : '');
         window.history.replaceState({}, document.title, cleanUrl);
       }
     } catch (_) {}
@@ -125,20 +136,128 @@
       return meta;
     }
 
-    // ---- cross-domain cid link decoration ----
-    // Decorates links to ANY internal domain (Maxim or Bifrost) with cd_cid
-    // so the receiving page inherits the same client identity.
-    document.addEventListener('mousedown', function (evt) {
+    // ---- cross-domain cid propagation ----
+    // getmaxim.ai and getbifrost.ai are different registrable domains, so a
+    // cookie cannot carry the cid between them.  We propagate it by stamping a
+    // cd_cid query param onto every link / form / programmatic navigation that
+    // targets the OTHER internal domain; the receiving tracker adopts it on load.
+    //
+    // Decoration is PROACTIVE (on load + as the DOM mutates) rather than only at
+    // mousedown, so the cid rides along no matter how the link is activated:
+    // left/middle/right click, keyboard Enter, cmd-click "open in new tab",
+    // touch on mobile, or the host site's own JS reading anchor.href.
+    function isCrossDomainInternal(urlObj) {
       try {
-        var anchor = evt.target.closest('a');
-        if (!anchor || !anchor.href) return;
-        var url = new URL(anchor.href);
-        if (isInternalHost(url.hostname) && url.origin !== window.location.origin) {
-          url.searchParams.set('cd_cid', cid);
-          anchor.href = url.toString();
-        }
+        return isInternalHost(urlObj.hostname) && urlObj.origin !== window.location.origin;
+      } catch (_) { return false; }
+    }
+
+    // Returns a cd_cid-decorated href string, or null if not applicable.
+    // Stamps BOTH the query (?cd_cid, primary) and the fragment (#__cdid, a
+    // redirect-proof fallback).  The fragment is only added when the link has no
+    // existing #fragment, so we never clobber in-page anchors (#section) — those
+    // are deep links that rarely redirect, so the query alone suffices for them.
+    function decorateHref(href) {
+      try {
+        var url = new URL(href, window.location.href);
+        if (!isCrossDomainInternal(url)) return null;
+        var hasQuery = url.searchParams.get('cd_cid') === cid;
+        var hasFrag  = /(^|#|&)__cdid=/.test(url.hash);
+        var canAddFrag = !url.hash; // no existing fragment to preserve
+        if (hasQuery && (hasFrag || !canAddFrag)) return null; // already done
+        if (!hasQuery) url.searchParams.set('cd_cid', cid);
+        if (canAddFrag) url.hash = '__cdid=' + cid;
+        return url.toString();
+      } catch (_) { return null; }
+    }
+
+    function decorateAnchor(a) {
+      try {
+        if (!a || a.tagName !== 'A' || !a.href) return;
+        var next = decorateHref(a.href);
+        if (next) a.href = next;
       } catch (_) {}
+    }
+
+    function decorateAnchorsIn(root) {
+      try {
+        var links = (root && root.getElementsByTagName) ? root.getElementsByTagName('a') : [];
+        for (var i = 0; i < links.length; i++) decorateAnchor(links[i]);
+      } catch (_) {}
+    }
+
+    // Cross-domain form posts: add (or refresh) a hidden cd_cid field.
+    function decorateForm(form) {
+      try {
+        if (!form || form.tagName !== 'FORM') return;
+        var action = form.getAttribute('action');
+        if (!action) return;
+        if (!isCrossDomainInternal(new URL(action, window.location.href))) return;
+        var existing = form.querySelector('input[name="cd_cid"]');
+        if (existing) { existing.value = cid; return; }
+        var inp = document.createElement('input');
+        inp.type = 'hidden'; inp.name = 'cd_cid'; inp.value = cid;
+        form.appendChild(inp);
+      } catch (_) {}
+    }
+
+    function decorateFormsIn(root) {
+      try {
+        var forms = (root && root.getElementsByTagName) ? root.getElementsByTagName('form') : [];
+        for (var i = 0; i < forms.length; i++) decorateForm(forms[i]);
+      } catch (_) {}
+    }
+
+    // Initial sweep once the DOM is ready.
+    function decorateInitial() { decorateAnchorsIn(document); decorateFormsIn(document); }
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', decorateInitial);
+    } else {
+      decorateInitial();
+    }
+
+    // Just-in-time backstop for links added between mutation batches, and for
+    // activation paths (keyboard) that may precede our observer.
+    function backstop(evt) {
+      try {
+        var a = evt.target && evt.target.closest ? evt.target.closest('a') : null;
+        if (a) decorateAnchor(a);
+      } catch (_) {}
+    }
+    document.addEventListener('mousedown', backstop, true);
+    document.addEventListener('auxclick', backstop, true);   // middle-click
+    document.addEventListener('touchstart', backstop, { capture: true, passive: true });
+    document.addEventListener('keydown', function (evt) {
+      if (evt.key === 'Enter' || evt.key === ' ') backstop(evt);
     }, true);
+    document.addEventListener('submit', function (evt) { decorateForm(evt.target); }, true);
+
+    // SPA / dynamically injected links and forms.
+    try {
+      new MutationObserver(function (muts) {
+        for (var i = 0; i < muts.length; i++) {
+          var nodes = muts[i].addedNodes;
+          for (var j = 0; j < nodes.length; j++) {
+            var n = nodes[j];
+            if (!n || n.nodeType !== 1) continue;
+            if (n.tagName === 'A') decorateAnchor(n);
+            else if (n.tagName === 'FORM') decorateForm(n);
+            else { decorateAnchorsIn(n); decorateFormsIn(n); }
+          }
+        }
+      }).observe(document.documentElement, { childList: true, subtree: true });
+    } catch (_) {}
+
+    // Programmatic navigation: window.open(url, ...).
+    try {
+      var _open = window.open;
+      window.open = function (u) {
+        try {
+          if (typeof u === 'string') { var d = decorateHref(u); if (d) arguments[0] = d; }
+        } catch (_) {}
+        return _open.apply(this, arguments);
+      };
+    } catch (_) {}
 
     // ---- client-side data (collected once) ----
     var _clientData = null;
@@ -153,18 +272,6 @@
       try { if (navigator.connection) d.connection_type = navigator.connection.effectiveType || navigator.connection.type; } catch (_) {}
       _clientData = d;
       return d;
-    }
-
-    // ---- mirror helper (fire-and-forget to secondary origin) ----
-    function _mirrorEvent(url, body) {
-      try {
-        if (navigator.sendBeacon) {
-          try { navigator.sendBeacon(url, body); return; } catch (_) {}
-        }
-        if (window.fetch) {
-          fetch(url, { method: 'POST', body: body, headers: { 'Content-Type': 'text/plain' }, keepalive: true }).catch(function () {});
-        }
-      } catch (_) {}
     }
 
     // ---- failed form_submit persistence (recovery on next page load) ----
@@ -249,12 +356,6 @@
         };
         var url = apiOrigin + '/track/event?tid=' + encodeURIComponent(trackingId || '');
         var body = JSON.stringify(payload);
-
-        // Disabled: double-sending (mirroring) tracking events to the secondary
-        // origin (Railway). Kept for reference — re-enable to restore mirroring.
-        // if (secondaryOrigin) {
-        //   _mirrorEvent(secondaryOrigin + '/track/event?tid=' + encodeURIComponent(trackingId || ''), body);
-        // }
 
         // form_submit is the highest-value event: deliver via fetch with
         // retries so transient network errors / 5xx don't lose the lead.
