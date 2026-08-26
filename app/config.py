@@ -62,6 +62,14 @@ class Settings(BaseSettings):
     admin_username: str = Field(default="admin", description="Admin username")
     admin_password: str = Field(default="admin123", description="Admin password")
     admin_email: str = Field(default="admin@crawldoctor.com", description="Admin email")
+    admin_password_reset_on_boot: bool = Field(
+        default=False,
+        description=(
+            "Force the admin password back to admin_password on every container boot. "
+            "Off by default so in-app password changes survive restarts; turn on "
+            "temporarily to recover a locked-out admin account."
+        ),
+    )
     
     # Rate Limiting
     rate_limit_requests: int = Field(default=1000, description="Rate limit requests per minute")

@@ -99,8 +99,8 @@ except Exception as e:
     # Don't exit - migrations might have already created tables
 "
 
-# Create/reset default admin user
-echo "👤 Setting up default admin user..."
+# Ensure admin user exists (create-only unless CRAWLDOCTOR_ADMIN_PASSWORD_RESET_ON_BOOT=true)
+echo "👤 Ensuring admin user exists..."
 python3 /app/reset_admin.py
 
 # Configure nginx to listen on $PORT (Railway injects this; default 8000)
