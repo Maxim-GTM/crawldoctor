@@ -17,7 +17,7 @@ A comprehensive system for tracking and analyzing AI crawler visits to your webs
 - **⚡ Real-time Dashboard**: Live monitoring with auto-refresh capabilities
 
 ### Security & Performance
-- **🔒 JWT Authentication**: Secure dashboard access with role-based permissions
+- **🔒 Single Sign-On**: Dashboard sign-in through the GTM Hub, with role-based permissions
 - **⚡ Rate Limiting**: Redis-based rate limiting to prevent abuse
 - **🛡️ Input Validation**: Comprehensive validation and sanitization
 - **🚀 High Performance**: Async FastAPI backend with optimized database queries
@@ -70,7 +70,8 @@ A comprehensive system for tracking and analyzing AI crawler visits to your webs
 
 3. **Access the dashboard**:
    - Open http://localhost:8000
-   - Login with: `admin` / `admin123`
+   - Sign-in goes through the GTM Hub (see [Sign-in](#sign-in-gtm-hub-single-sign-on)); for local
+     development set `HUB_SSO_DISABLED=true` to skip it
 
 ### Option 2: Fly.io Deployment
 
@@ -105,8 +106,10 @@ A comprehensive system for tracking and analyzing AI crawler visits to your webs
 2. **Set up environment**:
    ```bash
    cp env.example .env
-   # Edit .env with your configuration
+   # Edit .env with your configuration; for local development add HUB_SSO_DISABLED=true
    ```
+   Leave `REACT_APP_API_URL` unset so `npm start` proxies `/api` to the backend on the same origin
+   (the hub sign-in exchange refuses cross-origin requests).
 
 3. **Start services**:
    ```bash
@@ -160,6 +163,37 @@ CRAWLDOCTOR_RATE_LIMIT_WINDOW=60
 CRAWLDOCTOR_CORS_ORIGINS='["https://yourdomain.com"]'
 ```
 
+### Sign-in (GTM Hub single sign-on)
+
+People sign in to the dashboard through the GTM Hub (https://hub.agitracker.io); CrawlDoctor has no
+login page of its own. On every page load the dashboard calls `GET /api/v1/auth/hub`, which asks the
+hub (`{HUB_URL}/api/sso/verify?app=crawldoctor`, forwarding only the `better-auth.` cookies) whether
+this browser may use CrawlDoctor:
+
+- **Allowed**: the local user is found or created by email (hub admins are CrawlDoctor admins; the role
+  is re-synced on every sign-in) and the usual access token is returned.
+- **Not signed in**: the browser goes to the hub login page and comes back afterwards.
+- **No access**: the browser goes to the hub's no-access page.
+- **Hub unreachable**: the dashboard shows "Sign-in service unavailable" (it fails closed).
+
+Every `*.agitracker.io` site receives the hub cookie, so the exchange refuses browser requests whose
+`Sec-Fetch-Site` is `same-site` or `cross-site`: only CrawlDoctor's own pages can get a token.
+"Sign out" goes to the hub's sign-out page.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `HUB_URL` | `https://hub.agitracker.io` | GTM Hub base URL |
+| `APP_PUBLIC_URL` | `https://crawldoctor.agitracker.io` | Where the hub sends people back after sign-in |
+| `HUB_APP_SLUG` | `crawldoctor` | This app's slug in the hub |
+| `HUB_SSO_DISABLED` | `false` | Local development only: skip the hub; everyone is `dev@localhost` (admin) |
+| `CRAWLDOCTOR_ALLOW_PASSWORD_LOGIN` | `false` | Break-glass: re-enable `POST /api/v1/auth/login` and `PUT /api/v1/auth/password` |
+
+The first four have no `CRAWLDOCTOR_` prefix. No variables were removed: `CRAWLDOCTOR_ADMIN_*` still
+bootstrap the local `admin` account, which can only sign in while `CRAWLDOCTOR_ALLOW_PASSWORD_LOGIN=true`
+(set a strong `CRAWLDOCTOR_ADMIN_PASSWORD` before turning it on). Unchanged: the public `/track/*`
+endpoints and their CORS, `/health`, `/test/*`, export API keys (`X-Export-API-Key`) and per-user API
+keys (`X-API-Key`).
+
 ### Custom Crawler Patterns
 
 Add custom crawler detection patterns via the admin panel:
@@ -178,14 +212,14 @@ Add custom crawler detection patterns via the admin panel:
 
 ### Authentication
 ```bash
-# Get access token
-curl -X POST "https://your-domain.com/api/v1/auth/login" \
-     -H "Content-Type: application/json" \
-     -d '{"username": "admin", "password": "admin123"}'
-
-# Use API key (alternative)
+# Use your API key
 curl -H "X-API-Key: your-api-key" \
      "https://your-domain.com/api/v1/analytics/summary"
+
+# Break-glass only (CRAWLDOCTOR_ALLOW_PASSWORD_LOGIN=true): get an access token with a password
+curl -X POST "https://your-domain.com/api/v1/auth/login" \
+     -H "Content-Type: application/json" \
+     -d '{"username": "admin", "password": "your-admin-password"}'
 ```
 
 ### Analytics API

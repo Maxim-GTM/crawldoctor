@@ -1,13 +1,16 @@
 """API endpoints for authentication and user management."""
 from datetime import datetime, timedelta
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
 import structlog
 
+from app.config import settings
 from app.database import get_db
+from app.services import hub
 from app.services.auth import AuthService
 from app.models.user import User
 from app.utils.auth import get_current_user
@@ -56,12 +59,90 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
-@router.post("/login", response_model=LoginResponse)
+def require_password_login():
+    """Password sign-in is break-glass only; people sign in through the GTM Hub."""
+    if not settings.allow_password_login:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Password sign-in is disabled; sign in through the GTM Hub"
+        )
+
+
+def login_payload(user: User) -> dict:
+    """Access token response shared by password and hub sign-in."""
+    access_token = auth_service.create_access_token(
+        data={"sub": str(user.id), "username": user.username}
+    )
+    return LoginResponse(
+        access_token=access_token,
+        expires_in=auth_service.token_expire_minutes * 60,
+        user={
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "full_name": user.full_name,
+            "is_superuser": user.is_superuser
+        }
+    ).model_dump()
+
+
+@router.get("/hub")
+async def hub_sign_in(
+    request: Request,
+    next_path: str = Query("/", alias="next"),
+    db: Session = Depends(get_db)
+):
+    """Exchange the browser's GTM Hub session for a CrawlDoctor access token."""
+    no_store = {"Cache-Control": "no-store"}
+
+    # Every *.agitracker.io site receives the hub cookie, so only CrawlDoctor's
+    # own pages may swap it for a token.
+    if request.headers.get("sec-fetch-site") in ("same-site", "cross-site"):
+        return JSONResponse(status_code=403, content={"error": "cross_origin"}, headers=no_store)
+
+    try:
+        session = await hub.verify("; ".join(request.headers.getlist("cookie")))
+    except hub.HubUnavailable:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "hub_unavailable", "detail": "Sign-in service unavailable, try again shortly"},
+            headers=no_store
+        )
+
+    if session.status == 401:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "unauthenticated", "login_url": hub.login_url(next_path)},
+            headers=no_store
+        )
+    if session.status == 403:
+        return JSONResponse(
+            status_code=403,
+            content={"error": "forbidden", "no_access_url": hub.no_access_url()},
+            headers=no_store
+        )
+
+    user = await auth_service.sync_hub_user(db, session.user)
+    if not user.is_active:
+        logger.warning("Hub sign-in refused: local user is deactivated", user_id=user.id)
+        return JSONResponse(
+            status_code=403,
+            content={"error": "forbidden", "detail": "Account is deactivated", "no_access_url": hub.no_access_url()},
+            headers=no_store
+        )
+
+    return JSONResponse(
+        content={**login_payload(user), "signout_url": hub.signout_url()},
+        headers=no_store
+    )
+
+
+@router.post("/login", response_model=LoginResponse, dependencies=[Depends(require_password_login)])
 async def login(
     request: LoginRequest,
     db: Session = Depends(get_db)
 ):
-    """Authenticate user and return access token."""
+    """Authenticate user and return access token (break-glass only)."""
     try:
         user = await auth_service.authenticate_user(
             db=db,
@@ -75,22 +156,7 @@ async def login(
                 detail="Invalid username or password"
             )
         
-        # Create access token
-        access_token = auth_service.create_access_token(
-            data={"sub": str(user.id), "username": user.username}
-        )
-        
-        return LoginResponse(
-            access_token=access_token,
-            expires_in=auth_service.token_expire_minutes * 60,
-            user={
-                "id": user.id,
-                "username": user.username,
-                "email": user.email,
-                "full_name": user.full_name,
-                "is_superuser": user.is_superuser
-            }
-        )
+        return login_payload(user)
         
     except HTTPException:
         raise
@@ -166,13 +232,13 @@ async def create_user(
         )
 
 
-@router.put("/password")
+@router.put("/password", dependencies=[Depends(require_password_login)])
 async def change_password(
     request: ChangePasswordRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Change user password."""
+    """Change user password (break-glass only)."""
     try:
         # Verify current password
         if not auth_service.verify_password(request.current_password, current_user.hashed_password):

@@ -55,7 +55,18 @@ async def lifespan(app: FastAPI):
     """Application lifespan management."""
     # Startup
     logger.info("Starting CrawlDoctor application")
-    
+
+    if settings.hub_sso_disabled:
+        logger.warning(
+            "HUB_SSO_DISABLED is on: the GTM Hub is not consulted and every dashboard visitor "
+            "is signed in as a local admin. Never enable this in production."
+        )
+    if settings.allow_password_login:
+        logger.warning(
+            "CRAWLDOCTOR_ALLOW_PASSWORD_LOGIN is on: break-glass username/password sign-in is enabled. "
+            "Turn it off once sign-in through the GTM Hub works again."
+        )
+
     try:
         # Initialize database
         await init_db()

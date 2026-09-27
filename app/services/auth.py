@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from passlib.context import CryptContext
 from jose import JWTError, jwt
+from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 import structlog
 
@@ -150,6 +152,60 @@ class AuthService:
         logger.info("User created successfully", username=username, user_id=user.id)
         return user
     
+    async def sync_hub_user(
+        self,
+        db: Session,
+        hub_user: Dict[str, Any]
+    ) -> User:
+        """Find or create the local user for a GTM Hub identity and mirror its name and role."""
+        email = hub_user["email"].strip().lower()
+        name = (hub_user.get("name") or "").strip()[:100] or None
+        is_admin = hub_user.get("role") == "admin"
+
+        user = db.query(User).filter(func.lower(User.email) == email).first()
+        if not user:
+            # The password is random and never shown: hub users can't use password sign-in.
+            user = User(
+                username=self._hub_username(db, email),
+                email=email,
+                hashed_password=self.hash_password(secrets.token_urlsafe(32)),
+                full_name=name,
+                is_active=True,
+                is_superuser=is_admin,
+                api_key=self.generate_api_key(),
+                api_key_created_at=datetime.now(timezone.utc)
+            )
+            db.add(user)
+            try:
+                db.commit()
+                logger.info("Created user from GTM Hub sign-in", email=email, is_superuser=is_admin)
+            except IntegrityError:
+                # Another request created the same user concurrently.
+                db.rollback()
+                user = db.query(User).filter(func.lower(User.email) == email).first()
+                if not user:
+                    raise
+
+        if not user.is_active:
+            return user
+
+        # The hub is the source of truth for the role: re-sync it on every sign-in.
+        user.is_superuser = is_admin
+        if name:
+            user.full_name = name
+        user.last_login = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(user)
+        return user
+
+    def _hub_username(self, db: Session, email: str) -> str:
+        """Username for a new hub user: the email, or its local part if the email is too long."""
+        max_length = User.__table__.c.username.type.length
+        username = email if len(email) <= max_length else email.split("@", 1)[0][:max_length]
+        if db.query(User.id).filter(User.username == username).first():
+            username = f"{username[:max_length - 9]}-{secrets.token_hex(4)}"
+        return username
+
     async def update_user_password(
         self,
         db: Session,

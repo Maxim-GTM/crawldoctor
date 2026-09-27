@@ -4,7 +4,6 @@ import { AuthProvider } from './contexts/AuthContext';
 import { NotificationProvider } from './contexts/NotificationContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
-import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import EmbedGuide from './pages/EmbedGuide';
 import NotFound from './pages/NotFound';
@@ -21,8 +20,8 @@ function App() {
       <NotificationProvider>
         <div className="App min-h-screen bg-gray-50">
           <Routes>
-            {/* Public routes */}
-            <Route path="/login" element={<Login />} />
+            {/* Sign-in happens in the GTM Hub; keep old /login links working */}
+            <Route path="/login" element={<Navigate to="/dashboard" replace />} />
             
             {/* Protected routes */}
             <Route path="/" element={
