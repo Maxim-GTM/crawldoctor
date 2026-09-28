@@ -1,5 +1,5 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { apiClient } from '../utils/api';
+import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import { hubSignIn } from '../utils/api';
 
 interface User {
   id: number;
@@ -12,8 +12,10 @@ interface User {
 interface AuthContextType {
   user: User | null;
   token: string | null;
-  login: (username: string, password: string) => Promise<void>;
-  logout: () => void;
+  signOutUrl: string | null;
+  signOut: () => void;
+  retry: () => void;
+  error: string | null;
   isLoading: boolean;
   isAuthenticated: boolean;
 }
@@ -34,82 +36,53 @@ interface AuthProviderProps {
 
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(localStorage.getItem('auth_token'));
+  const [token, setToken] = useState<string | null>(null);
+  const [signOutUrl, setSignOutUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   // Check if user is authenticated
   const isAuthenticated = Boolean(user && token);
 
-  // Initialize auth state
-  useEffect(() => {
-    const initAuth = async () => {
-      const savedToken = localStorage.getItem('auth_token');
-      
-      if (savedToken) {
-        try {
-          // Validate token and get user info
-          apiClient.defaults.headers.common['Authorization'] = `Bearer ${savedToken}`;
-          const response = await apiClient.get('/api/v1/auth/me');
-          setUser(response.data);
-          setToken(savedToken);
-        } catch (error) {
-          // Token is invalid, remove it
-          console.error('Token validation failed:', error);
-          localStorage.removeItem('auth_token');
-          setToken(null);
-          setUser(null);
-          delete apiClient.defaults.headers.common['Authorization'];
-        }
-      }
-      
+  // Sign in through the GTM Hub on every page load, so a hub sign-out or a
+  // revoked dashboard applies as soon as the page is opened again. People who
+  // aren't signed in (or have no access) are sent to the hub instead.
+  const signIn = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const session = await hubSignIn();
+      setToken(session.access_token);
+      setUser(session.user);
+      setSignOutUrl(session.signout_url);
+    } catch (err: any) {
+      console.error('Hub sign-in failed:', err);
+      setError(
+        err.response?.status === 503
+          ? 'Sign-in service unavailable, try again shortly.'
+          : 'Could not sign you in.'
+      );
+    } finally {
       setIsLoading(false);
-    };
-
-    initAuth();
+    }
   }, []);
 
-  const login = async (username: string, password: string) => {
-    try {
-      const response = await apiClient.post('/api/v1/auth/login', {
-        username,
-        password,
-      });
+  useEffect(() => {
+    signIn();
+  }, [signIn]);
 
-      const { access_token, user: userData } = response.data;
-      
-      // Save token and user data
-      localStorage.setItem('auth_token', access_token);
-      setToken(access_token);
-      setUser(userData);
-      
-      // Set default authorization header
-      apiClient.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
-    } catch (error: any) {
-      const message = error.response?.data?.detail || 'Login failed';
-      throw new Error(message);
-    }
-  };
-
-  const logout = () => {
-    // Clear local storage
+  // Used by the "Sign out" link, which then takes the browser to the hub's sign-out page
+  const signOut = () => {
     localStorage.removeItem('auth_token');
-    
-    // Clear state
-    setToken(null);
-    setUser(null);
-    
-    // Remove authorization header
-    delete apiClient.defaults.headers.common['Authorization'];
-    
-    // Optional: Call logout endpoint
-    apiClient.post('/api/v1/auth/logout').catch(console.error);
   };
 
   const value: AuthContextType = {
     user,
     token,
-    login,
-    logout,
+    signOutUrl,
+    signOut,
+    retry: signIn,
+    error,
     isLoading,
     isAuthenticated,
   };

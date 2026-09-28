@@ -45,6 +45,8 @@ services:
       CRAWLDOCTOR_DEBUG: "true"
       CRAWLDOCTOR_ENVIRONMENT: "development"
       CRAWLDOCTOR_CORS_ORIGINS: '["http://localhost:3000", "http://localhost:8000"]'
+      # The integration tests sign in with admin/admin123 (break-glass password login)
+      CRAWLDOCTOR_ALLOW_PASSWORD_LOGIN: "true"
     ports:
       - "8000:8000"
     depends_on:

@@ -1,5 +1,4 @@
 import React, { ReactNode } from 'react';
-import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from './LoadingSpinner';
 
@@ -9,21 +8,31 @@ interface ProtectedRouteProps {
 }
 
 const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, requireAdmin = false }) => {
-  const { isAuthenticated, isLoading, user } = useAuth();
-  const location = useLocation();
+  const { isAuthenticated, isLoading, error, retry, user } = useAuth();
 
-  // Show loading spinner while checking authentication
-  if (isLoading) {
+  // Hub sign-in failed (e.g. the hub is unavailable): never show the dashboard
+  if (error) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <h3 className="text-sm font-medium text-gray-900">{error}</h3>
+          <div className="mt-6">
+            <button onClick={retry} className="btn-secondary">
+              Try again
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show loading spinner while signing in (or while the browser is being sent to the hub)
+  if (isLoading || !isAuthenticated) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <LoadingSpinner size="large" />
       </div>
     );
-  }
-
-  // Redirect to login if not authenticated
-  if (!isAuthenticated) {
-    return <Navigate to="/login" state={{ from: location }} replace />;
   }
 
   // Check admin requirement

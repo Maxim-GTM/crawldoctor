@@ -3,6 +3,9 @@
 
 Runs on every container boot from docker-entrypoint-single.sh.
 
+People sign in through the GTM Hub; this admin is a break-glass account that
+can only sign in while CRAWLDOCTOR_ALLOW_PASSWORD_LOGIN=true.
+
 By default this is CREATE-ONLY: a missing admin user is created from
 CRAWLDOCTOR_ADMIN_PASSWORD, but an existing one is left untouched so that
 passwords changed via PUT /api/v1/auth/password survive restarts.

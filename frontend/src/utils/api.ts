@@ -18,14 +18,65 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
-// Handle auth errors
+export interface HubSession {
+  access_token: string;
+  expires_in: number;
+  user: {
+    id: number;
+    username: string;
+    email: string;
+    full_name?: string;
+    is_superuser: boolean;
+  };
+  signout_url: string;
+}
+
+let pendingHubSignIn: Promise<HubSession> | null = null;
+
+const requestHubSession = async (): Promise<HubSession> => {
+  try {
+    const response = await apiClient.get<HubSession>('/api/v1/auth/hub', {
+      params: { next: window.location.pathname + window.location.search },
+      skipHubRetry: true,
+    } as any);
+    localStorage.setItem('auth_token', response.data.access_token);
+    return response.data;
+  } catch (error: any) {
+    const status = error.response?.status;
+    const hubPage = error.response?.data?.login_url || error.response?.data?.no_access_url;
+    if ((status === 401 || status === 403) && hubPage) {
+      localStorage.removeItem('auth_token');
+      window.location.assign(hubPage);
+      return new Promise<HubSession>(() => {});
+    }
+    throw error;
+  } finally {
+    pendingHubSignIn = null;
+  }
+};
+
+// Swap the GTM Hub session (a cookie the browser sends along) for a CrawlDoctor
+// access token. When the hub says the person isn't signed in or has no access,
+// the browser is sent to the hub and the returned promise never settles.
+export const hubSignIn = (): Promise<HubSession> => {
+  if (!pendingHubSignIn) {
+    pendingHubSignIn = requestHubSession();
+  }
+  return pendingHubSignIn;
+};
+
+// Handle auth errors: on a 401 (e.g. expired token), sign in through the hub
+// again once and retry with the new token
 apiClient.interceptors.response.use(
   (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      localStorage.removeItem('auth_token');
-      window.location.href = '/login';
-    } else if (error.response?.status >= 500) {
+  async (error) => {
+    const request = error.config;
+    if (error.response?.status === 401 && request && !request.skipHubRetry) {
+      request.skipHubRetry = true;
+      await hubSignIn();
+      return apiClient(request);
+    }
+    if (error.response?.status >= 500) {
       console.error('Server error:', error.response?.data);
     }
     return Promise.reject(error);
@@ -34,21 +85,8 @@ apiClient.interceptors.response.use(
 
 // Auth API
 export const authAPI = {
-  login: async (username: string, password: string) => {
-    const response = await apiClient.post('/api/v1/auth/login', {
-      username,
-      password,
-    });
-    return response.data;
-  },
-
   me: async () => {
     const response = await apiClient.get('/api/v1/auth/me');
-    return response.data;
-  },
-
-  logout: async () => {
-    const response = await apiClient.post('/api/v1/auth/logout');
     return response.data;
   },
 };

@@ -70,7 +70,37 @@ class Settings(BaseSettings):
             "temporarily to recover a locked-out admin account."
         ),
     )
-    
+    allow_password_login: bool = Field(
+        default=False,
+        description=(
+            "Break-glass: re-enable username/password sign-in (POST /auth/login, PUT /auth/password). "
+            "Off by default; people sign in through the GTM Hub."
+        ),
+    )
+
+    # GTM Hub single sign-on. These are shared by every app behind the hub, so
+    # they are read without the CRAWLDOCTOR_ prefix.
+    hub_url: str = Field(
+        default="https://hub.agitracker.io",
+        validation_alias="HUB_URL",
+        description="GTM Hub base URL",
+    )
+    app_public_url: str = Field(
+        default="https://crawldoctor.agitracker.io",
+        validation_alias="APP_PUBLIC_URL",
+        description="Public URL of this dashboard; the hub sends people back here after sign-in",
+    )
+    hub_app_slug: str = Field(
+        default="crawldoctor",
+        validation_alias="HUB_APP_SLUG",
+        description="This app's slug in the GTM Hub",
+    )
+    hub_sso_disabled: bool = Field(
+        default=False,
+        validation_alias="HUB_SSO_DISABLED",
+        description="Local development only: skip the hub and treat everyone as a local admin",
+    )
+
     # Rate Limiting
     rate_limit_requests: int = Field(default=1000, description="Rate limit requests per minute")
     rate_limit_window: int = Field(default=60, description="Rate limit window in seconds")

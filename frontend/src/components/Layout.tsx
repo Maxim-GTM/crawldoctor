@@ -30,8 +30,9 @@ const navigation = [
 const Layout: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [processing, setProcessing] = useState(false);
-  const { user, logout } = useAuth();
+  const { user, signOutUrl, signOut } = useAuth();
   const location = useLocation();
+  const displayName = user?.full_name || user?.username;
 
   const isActivePath = (path: string) => {
     return location.pathname === path;
@@ -158,18 +159,23 @@ const Layout: React.FC = () => {
                   </div>
                   <span className="sr-only">Your profile</span>
                   <div className="flex-1">
-                    <div className="text-sm font-medium">{user?.username}</div>
+                    <div className="text-sm font-medium">{displayName}</div>
                     <div className="text-xs text-gray-500">{user?.email}</div>
                   </div>
-                  <button
-                    onClick={logout}
-                    className="text-gray-400 hover:text-gray-600"
-                    title="Logout"
-                  >
-                    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                    </svg>
-                  </button>
+                  {/* Signing out happens in the GTM Hub; _top leaves the hub's iframe */}
+                  {signOutUrl && (
+                    <a
+                      href={signOutUrl}
+                      target="_top"
+                      onClick={signOut}
+                      className="text-gray-400 hover:text-gray-600"
+                      title="Sign out"
+                    >
+                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                      </svg>
+                    </a>
+                  )}
                 </div>
               </li>
             </ul>
@@ -195,7 +201,7 @@ const Layout: React.FC = () => {
               {/* User menu */}
               <div className="flex items-center gap-x-2">
                 <span className="text-sm text-gray-700">
-                  Welcome, {user?.username}
+                  Welcome, {displayName}
                 </span>
                 {user?.is_superuser && (
                   <span className="badge badge-blue">Admin</span>
