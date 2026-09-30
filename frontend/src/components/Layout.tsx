@@ -14,6 +14,7 @@ import {
   BoltIcon,
 } from '@heroicons/react/24/outline';
 import { useAuth } from '../contexts/AuthContext';
+import StandaloneOnly from './StandaloneOnly';
 import { adminAPI } from '../utils/api';
 
 const navigation = [
@@ -152,32 +153,34 @@ const Layout: React.FC = () => {
                   </li>
                 </ul>
               </li>
-              <li className="-mx-6 mt-auto">
-                <div className="flex items-center gap-x-4 px-6 py-3 text-sm font-semibold leading-6 text-gray-900">
-                  <div className="h-8 w-8 rounded-full bg-primary-100 flex items-center justify-center">
-                    <UserIcon className="h-5 w-5 text-primary-600" />
+              {/* Inside the hub, its own sidebar has the account and Sign out. */}
+              <StandaloneOnly>
+                <li className="-mx-6 mt-auto">
+                  <div className="flex items-center gap-x-4 px-6 py-3 text-sm font-semibold leading-6 text-gray-900">
+                    <div className="h-8 w-8 rounded-full bg-primary-100 flex items-center justify-center">
+                      <UserIcon className="h-5 w-5 text-primary-600" />
+                    </div>
+                    <span className="sr-only">Your profile</span>
+                    <div className="flex-1">
+                      <div className="text-sm font-medium">{displayName}</div>
+                      <div className="text-xs text-gray-500">{user?.email}</div>
+                    </div>
+                    {/* Signing out happens in the GTM Hub */}
+                    {signOutUrl && (
+                      <a
+                        href={signOutUrl}
+                        onClick={signOut}
+                        className="text-gray-400 hover:text-gray-600"
+                        title="Sign out"
+                      >
+                        <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                        </svg>
+                      </a>
+                    )}
                   </div>
-                  <span className="sr-only">Your profile</span>
-                  <div className="flex-1">
-                    <div className="text-sm font-medium">{displayName}</div>
-                    <div className="text-xs text-gray-500">{user?.email}</div>
-                  </div>
-                  {/* Signing out happens in the GTM Hub; _top leaves the hub's iframe */}
-                  {signOutUrl && (
-                    <a
-                      href={signOutUrl}
-                      target="_top"
-                      onClick={signOut}
-                      className="text-gray-400 hover:text-gray-600"
-                      title="Sign out"
-                    >
-                      <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                      </svg>
-                    </a>
-                  )}
-                </div>
-              </li>
+                </li>
+              </StandaloneOnly>
             </ul>
           </nav>
         </div>

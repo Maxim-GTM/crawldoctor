@@ -178,7 +178,8 @@ this browser may use CrawlDoctor:
 
 Every `*.agitracker.io` site receives the hub cookie, so the exchange refuses browser requests whose
 `Sec-Fetch-Site` is `same-site` or `cross-site`: only CrawlDoctor's own pages can get a token.
-"Sign out" goes to the hub's sign-out page.
+"Sign out" goes to the hub's sign-out page. It and the signed-in user at the foot of the sidebar show
+only when CrawlDoctor is opened on its own; inside the hub, the hub's sidebar has them.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
