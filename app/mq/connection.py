@@ -5,6 +5,7 @@ pool for the publisher.  Consumers get dedicated channels via get_consumer_chann
 """
 import asyncio
 from typing import Optional
+from urllib.parse import urlparse
 
 import aio_pika
 import aio_pika.pool
@@ -25,7 +26,8 @@ class MQConnection:
             settings.rabbitmq_url,
             reconnect_interval=5,
         )
-        logger.info("RabbitMQ connected", url=settings.rabbitmq_url)
+        # Host only: the URL carries the password.
+        logger.info("RabbitMQ connected", host=urlparse(settings.rabbitmq_url).hostname)
 
         async def _make_channel() -> aio_pika.Channel:
             assert self._connection is not None

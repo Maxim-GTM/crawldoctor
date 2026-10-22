@@ -1,0 +1,46 @@
+# Runs on gtm-apps-1 as compose project "crawldoctor". The deploy workflow sends this file to the
+# host, where /opt/gtm/bin/deploy-app renders .env from SSM (/gtm/crawldoctor/*) and sets IMAGE.
+# No published ports: Caddy (on the shared "gtm" network) proxies crawldoctor.agitracker.io to
+# crawldoctor:8000. RabbitMQ is only on this project's own network, so nothing else (and no
+# route) reaches it.
+services:
+  crawldoctor:
+    image: ${IMAGE:?IMAGE is set by deploy-app}
+    env_file: .env
+    restart: unless-stopped
+    # Public tracking traffic from getmaxim.ai and getbifrost.ai lands here.
+    mem_limit: 2g
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    networks: [gtm, internal]
+
+  rabbitmq:
+    image: rabbitmq:4.3.5@sha256:078107e036374f4d9bbeab8766799abe474bf252aedb4617ddd2edfa8e2c2c05
+    # A fixed hostname keeps the node name (rabbit@rabbitmq), so queued messages in the volume
+    # survive a container replacement.
+    hostname: rabbitmq
+    environment:
+      # Read from .env (/gtm/crawldoctor/*). They only take effect on an empty volume; to change
+      # the password later, use rabbitmqctl change_password inside the container.
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:?}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    restart: unless-stopped
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+    networks: [internal]
+
+volumes:
+  rabbitmq-data:
+
+networks:
+  gtm:
+    external: true
+  internal:
