@@ -103,7 +103,7 @@ except Exception as e:
 echo "👤 Ensuring admin user exists..."
 python3 /app/reset_admin.py
 
-# Configure nginx to listen on $PORT (Railway injects this; default 8000)
+# Configure nginx to listen on $PORT (default 8000)
 LISTEN_PORT=${PORT:-8000}
 sed -i "s/listen 8000;/listen ${LISTEN_PORT};/" /etc/nginx/sites-available/default
 

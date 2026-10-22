@@ -1,0 +1,92 @@
+# Pull requests: build the image (no AWS access).
+# Pushes to main: build, push to ECR, and deploy to gtm-apps-1 through SSM Run Command.
+# AWS access is a short-lived OIDC session for the role in the AWS_DEPLOY_ROLE_ARN repo variable,
+# which only this repo's main branch can assume (see Maxim-GTM/gtm-infra, iam.tf).
+name: Build and deploy
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: crawldoctor
+  APP: crawldoctor
+  HOST_NAME_TAG: gtm-apps-1
+
+jobs:
+  build:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy to ${{ env.HOST_NAME_TAG }}
+        env:
+          IMAGE: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+        run: |
+          compose_b64=$(base64 -w0 deploy/compose.yml)
+          params=$(jq -nc --arg c "/opt/gtm/bin/deploy-app $APP $IMAGE $compose_b64" '{commands: [$c]}')
+          command_id=$(aws ssm send-command \
+            --targets "Key=tag:Name,Values=$HOST_NAME_TAG" \
+            --document-name AWS-RunShellScript \
+            --comment "deploy $APP ${GITHUB_SHA::7}" \
+            --parameters "$params" \
+            --query Command.CommandId --output text)
+          echo "SSM command $command_id"
+
+          # Wait for the host to report back (deploy-app waits for the container to be healthy).
+          for _ in $(seq 1 60); do
+            sleep 10
+            status=$(aws ssm list-commands --command-id "$command_id" --query 'Commands[0].Status' --output text)
+            case "$status" in Pending|InProgress|Delayed) continue ;; *) break ;; esac
+          done
+
+          aws ssm list-command-invocations --command-id "$command_id" --details \
+            --query 'CommandInvocations[].CommandPlugins[].[Output]' --output text
+          echo "Status: $status"
+          test "$status" = "Success"
