@@ -104,8 +104,12 @@ echo "👤 Ensuring admin user exists..."
 python3 /app/reset_admin.py
 
 # Configure nginx to listen on $PORT (default 8000)
+# Rewritten in place (no sed -i): appuser may write this file but not create files beside it.
 LISTEN_PORT=${PORT:-8000}
-sed -i "s/listen 8000;/listen ${LISTEN_PORT};/" /etc/nginx/sites-available/default
+if [ "$LISTEN_PORT" != "8000" ]; then
+    site=$(sed "s/listen 8000;/listen ${LISTEN_PORT};/" /etc/nginx/sites-available/default)
+    printf '%s\n' "$site" > /etc/nginx/sites-available/default
+fi
 
 echo "🐍 Starting FastAPI backend on port 8001..."
 # Start FastAPI backend on port 8001 in background with appropriate timeouts
