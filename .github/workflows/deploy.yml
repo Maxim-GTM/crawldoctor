@@ -33,8 +33,18 @@ jobs:
         with:
           context: .
           push: false
+          load: true
+          tags: crawldoctor:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      # The image runs as appuser; check nginx can start and serve the frontend without root.
+      - name: Smoke test nginx as the image user
+        run: |
+          docker run --rm --entrypoint sh crawldoctor:ci -c '
+            nginx -t && nginx &&
+            sleep 1 &&
+            curl -sf -o /dev/null http://127.0.0.1:8000/ &&
+            echo "nginx ok as $(id -un)"'
 
   deploy:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
