@@ -24,7 +24,6 @@ A comprehensive system for tracking and analyzing AI crawler visits to your webs
 
 ### Deployment Ready
 - **🐳 Docker Support**: Complete containerization with multi-stage builds
-- **☁️ Fly.io Ready**: Pre-configured for Fly.io deployment
 - **📊 Health Checks**: Built-in health monitoring and metrics
 - **🔧 Environment Management**: Comprehensive configuration system
 
@@ -73,24 +72,10 @@ A comprehensive system for tracking and analyzing AI crawler visits to your webs
    - Sign-in goes through the GTM Hub (see [Sign-in](#sign-in-gtm-hub-single-sign-on)); for local
      development set `HUB_SSO_DISABLED=true` to skip it
 
-### Option 2: Fly.io Deployment
+### Option 2: Production (AWS)
 
-1. **Install Fly CLI**:
-   ```bash
-   curl -L https://fly.io/install.sh | sh
-   ```
-
-2. **Deploy to Fly.io**:
-   ```bash
-   fly launch
-   fly deploy
-   ```
-
-3. **Set up database**:
-   ```bash
-   fly postgres create
-   fly secrets set CRAWLDOCTOR_DATABASE_URL="your-postgres-url"
-   ```
+Pushes to `main` build the image in GitHub Actions and deploy it to `gtm-apps-1` (see
+`.github/workflows/deploy.yml` and `deploy/compose.yml`).
 
 ### Option 3: Local Development
 
@@ -254,8 +239,8 @@ GEO-CrawlDoctor/
 │   │   ├── pages/         # Page components
 │   │   └── utils/         # Frontend utilities
 ├── docker-compose.yml     # Local development
-├── Dockerfile            # Production container
-└── fly.toml              # Fly.io configuration
+├── deploy/compose.yml     # Production compose file (AWS)
+└── Dockerfile            # Production container
 ```
 
 ### Running Tests
@@ -275,6 +260,17 @@ alembic revision --autogenerate -m "description"
 # Run migrations
 alembic upgrade head
 ```
+
+Commit every migration before it touches a shared database. The container runs
+`alembic upgrade head` on start (`docker-entrypoint-single.sh`):
+
+- a failed upgrade stops the container, so the deploy rolls back to the previous image;
+- if the database is stamped with a revision that is not in `alembic/versions` (a migration that
+  was applied from a local checkout and never committed), the container logs an ERROR, skips all
+  migrations and starts anyway. Nothing deletes or rewrites `alembic_version` automatically. To
+  fix it, either commit the missing migration file, or on a copy of the database (a Neon branch)
+  run `alembic stamp --purge <head revision>` then `alembic check` to diff the schema against the
+  models; once they match, run the same stamp on the real database.
 
 ## 🔐 Security Considerations
 
