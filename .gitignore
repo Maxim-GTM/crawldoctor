@@ -99,9 +99,6 @@ GeoLite2-*.mmdb
 *.tmp
 *.temp
 
-# Docker
-.dockerignore
-
 # Frontend build
 frontend/build/
 frontend/.env.local

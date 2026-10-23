@@ -122,18 +122,22 @@ async def track_event(
     try:
         client_ip = _get_client_ip(request)
         if not await rate_limiter.is_allowed(client_ip, "event_track"):
-            # Never drop a form_submit silently — log the full payload so the
-            # lead is recoverable from logs even when rate limited.
+            # Never drop a form_submit silently, but keep visitors' form values out of
+            # the logs: record which fields were sent, not what was typed into them.
             try:
                 body = await request.body()
                 dropped = json.loads(body.decode("utf-8") or "{}")
                 if dropped.get("event_type") == "form_submit":
+                    data = dropped.get("data") if isinstance(dropped.get("data"), dict) else {}
+                    values = data.get("form_values") or data.get("values") or {}
+                    fields = sorted(str(k) for k in values) if isinstance(values, dict) else []
                     logger.warning(
                         "Rate-limited form_submit dropped",
                         ip=client_ip,
                         cid=dropped.get("cid"),
                         page_url=dropped.get("page_url"),
-                        data=dropped.get("data"),
+                        field_count=len(fields),
+                        fields=fields[:50],
                     )
             except Exception:
                 pass

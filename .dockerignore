@@ -1,0 +1,34 @@
+# Keep the build context to what the Dockerfile COPYs: app/, alembic/, frontend/ sources, tests/,
+# nginx.conf, the entrypoint and its helper scripts. Nothing here is needed at runtime.
+.git
+.github
+.gitignore
+.dockerignore
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.venv
+venv
+.env
+.env.*
+*.log
+
+# Frontend: built inside the image from the sources
+**/node_modules
+frontend/build
+frontend/build.bak
+
+# Docs and local-only tooling
+*.md
+*.txt
+!requirements.txt
+backups
+deploy
+scripts
+check_funnel_paths.py
+clean_historical_data.py
+cross_domain_funnel.sql
+docker-compose*.yml
+env.example
+pytest.ini
+test_*.html

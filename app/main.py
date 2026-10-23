@@ -16,6 +16,7 @@ from app.config import settings
 from app.database import get_db, init_db, close_db
 from sqlalchemy.orm import Session
 from app.api import tracking_router, analytics_router, auth_router, admin_router
+from app.api.tracking import _get_client_ip
 from app.services.auth import AuthService
 from app.services.event_batcher import event_batcher
 from app.background import job_runner, job_scheduler
@@ -157,6 +158,7 @@ app = FastAPI(
     version=settings.app_version,
     docs_url="/docs" if settings.debug else None,
     redoc_url="/redoc" if settings.debug else None,
+    openapi_url="/openapi.json" if settings.debug else None,
     lifespan=lifespan
 )
 
@@ -204,7 +206,7 @@ class _LogRequestsMiddleware:
             "Request received",
             method=request.method,
             url=str(request.url),
-            client_ip=request.client.host if request.client else "unknown",
+            client_ip=_get_client_ip(request),
             user_agent=request.headers.get("user-agent", ""),
             path=request.url.path,
         )

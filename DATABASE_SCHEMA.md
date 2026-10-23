@@ -1,7 +1,5 @@
 # CrawlDoctor Database Schema
 
-**Connection String:** `postgresql://crawldoctor:d2zHmsJQEiIe7VZ@localhost:15432/crawldoctor`
-
 ## Overview
 
 CrawlDoctor is a web analytics and visitor tracking system that monitors website visits, tracks user journeys, detects bot/crawler traffic, and captures lead information from form submissions.
