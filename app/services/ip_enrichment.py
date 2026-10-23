@@ -129,8 +129,8 @@ class IpEnrichmentService:
               AND NOT EXISTS (
                 SELECT 1 FROM ip_enrichment e
                 WHERE e.ip = v.ip_address
-                  AND e.status = 'error'
-                  AND e.attempt_count >= :max_attempts
+                  AND (e.status = 'failed'
+                       OR (e.status = 'error' AND e.attempt_count >= :max_attempts))
               )
             LIMIT :batch_size
         """), {"batch_size": batch_size, "max_attempts": settings.ip_enrichment_max_attempts}).fetchall()

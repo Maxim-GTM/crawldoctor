@@ -31,6 +31,29 @@ _PERSONAL_DOMAINS = frozenset([
 ])
 
 
+# Column lengths of the summary tables (app/models/summary.py). Form values are free text from
+# visitors' browsers: one oversized value must not abort the whole recompute.
+_EMAIL_MAX = JourneySummary.__table__.c.email.type.length
+_NAME_MAX = JourneySummary.__table__.c.name.type.length
+_FORM_ID_MAX = JourneyFormFill.__table__.c.form_id.type.length
+_FORM_ACTION_MAX = JourneyFormFill.__table__.c.form_action.type.length
+_REFERRER_DOMAIN_MAX = LeadSummary.__table__.c.first_referrer_domain.type.length
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _fit(value: Any, max_len: int) -> Optional[str]:
+    """Return value as a string cut to max_len, or None for empty values."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text[:max_len] if text else None
+
+
+def _looks_like_email(value: str) -> bool:
+    return len(value) <= _EMAIL_MAX and bool(_EMAIL_RE.match(value))
+
+
 def _is_work_email(email: str) -> bool:
     domain = email.split("@")[-1].lower() if "@" in email else ""
     return bool(domain) and domain not in _PERSONAL_DOMAINS
@@ -46,10 +69,10 @@ def _extract_profile_from_values(form_vals: Optional[Dict]) -> tuple:
         if v is None or str(v).strip() == "":
             continue
         kl = str(k).lower()
-        if not email and ("email" in kl or "mail" in kl) and "@" in str(v):
+        if not email and ("email" in kl or "mail" in kl) and _looks_like_email(str(v).strip()):
             email = str(v).strip()
         if not name and ("name" in kl or "user" in kl or "full" in kl):
-            name = str(v).strip()
+            name = _fit(v, _NAME_MAX)
     return email, name
 
 
@@ -249,8 +272,8 @@ class RecomputeJourney:
                 path=ev.path,
                 form_values=fv if isinstance(fv, dict) else None,
                 filled_fields=filled,
-                form_id=ed.get("id"),
-                form_action=ed.get("action"),
+                form_id=_fit(ed.get("id"), _FORM_ID_MAX),
+                form_action=_fit(ed.get("action"), _FORM_ACTION_MAX),
             ))
 
         # --- Upsert LeadSummary (first form fill, backwards compat) ---
@@ -272,7 +295,7 @@ class RecomputeJourney:
             lead.medium = journey.medium
             lead.campaign = journey.campaign
             lead.first_referrer = first_visit.referrer if first_visit else None
-            lead.first_referrer_domain = _extract_domain(first_visit.referrer) if first_visit and first_visit.referrer else None
+            lead.first_referrer_domain = _fit(_extract_domain(first_visit.referrer), _REFERRER_DOMAIN_MAX) if first_visit and first_visit.referrer else None
             lead.first_seen = first_seen
             lead.last_seen = last_seen
         else:
@@ -289,7 +312,7 @@ class RecomputeJourney:
                 medium=journey.medium,
                 campaign=journey.campaign,
                 first_referrer=first_visit.referrer if first_visit else None,
-                first_referrer_domain=_extract_domain(first_visit.referrer) if first_visit and first_visit.referrer else None,
+                first_referrer_domain=_fit(_extract_domain(first_visit.referrer), _REFERRER_DOMAIN_MAX) if first_visit and first_visit.referrer else None,
                 first_seen=first_seen,
                 last_seen=last_seen,
             )

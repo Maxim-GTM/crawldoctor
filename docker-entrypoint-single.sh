@@ -3,89 +3,45 @@ set -e
 
 echo "🚀 Starting CrawlDoctor single-machine deployment..."
 
-# Function to handle migration errors
-handle_migration_error() {
-    echo "⚠️  Migration error detected, attempting to fix..."
-    
-    # Reset alembic_version table
-    python3 -c "
-import psycopg2
-from app.config import settings
-import urllib.parse as urlparse
-
-try:
-    url = urlparse.urlparse(settings.database_url)
-    conn = psycopg2.connect(
-        database=url.path[1:],
-        user=url.username,
-        password=url.password,
-        host=url.hostname,
-        port=url.port
-    )
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM alembic_version;')
-    conn.commit()
-    print('✅ Cleared migration state')
-    cursor.close()
-    conn.close()
-except Exception as e:
-    print(f'Note: {e}')
-" || true
-}
-
-# Wait for database to be ready
+# Wait for database to be ready (connects with the full CRAWLDOCTOR_DATABASE_URL, sslmode included)
 echo "⏳ Waiting for database connection..."
-python3 -c "
-import time
-import psycopg2
-from app.config import settings
+python3 -m app.db_bootstrap wait
 
-max_attempts = 30
-attempt = 0
-
-while attempt < max_attempts:
-    try:
-        # Parse database URL
-        import urllib.parse as urlparse
-        url = urlparse.urlparse(settings.database_url)
-        
-        conn = psycopg2.connect(
-            database=url.path[1:],
-            user=url.username,
-            password=url.password,
-            host=url.hostname,
-            port=url.port
-        )
-        conn.close()
-        print('✅ Database is ready!')
-        break
-    except psycopg2.OperationalError:
-        attempt += 1
-        print(f'⏳ Database not ready, waiting... (attempt {attempt}/{max_attempts})')
-        time.sleep(2)
-else:
-    print('❌ Could not connect to database after 30 attempts')
-    exit(1)
-"
-
-# Run database migrations with Alembic (must complete before app starts)
-echo "🔧 Running database migrations..."
+# Database migrations (must complete before the app starts).
+#
+# What happens on each outcome:
+#   - DB at a revision this image knows: `alembic upgrade head`. If that fails, exit 1. Postgres
+#     runs each migration in a transaction, so the schema is left as it was, and deploy-app on the
+#     host rolls back to the previous image when this container never becomes healthy.
+#   - DB at a revision NOT in alembic/versions (e.g. stamped from a migration that was never
+#     committed): log an ERROR and start WITHOUT migrating. Exiting would only crash-loop the
+#     production tracker; the fix is a manual `alembic stamp` (see "Database migrations" in
+#     README.md). Nothing here ever deletes or rewrites alembic_version.
+#   - The revision check itself fails (DB or alembic error): exit 1, same as a failed upgrade.
+echo "🔧 Checking database migration state..."
 set +e
-alembic upgrade head 2>&1 | tee /tmp/migration.log
-MIGRATION_EXIT=$?
+python3 -m app.db_bootstrap check-revision
+REVISION_CHECK=$?
 set -e
-if [ $MIGRATION_EXIT -eq 0 ]; then
-    echo "✅ Database migrations completed"
-else
-    if grep -q "Can't locate revision" /tmp/migration.log; then
-        echo "🔧 Fixing orphaned migration state..."
-        handle_migration_error
-        alembic stamp 73f8498762a0 || true
-        alembic upgrade head || echo "⚠️  Migration skipped, continuing..."
-    else
-        echo "⚠️  Migration had issues, continuing with app startup..."
-    fi
-fi
+case $REVISION_CHECK in
+    0)
+        echo "🔧 Running database migrations..."
+        if alembic upgrade head; then
+            echo "✅ Database migrations completed"
+        else
+            echo "❌ ERROR: alembic upgrade head failed; not starting the app" >&2
+            exit 1
+        fi
+        ;;
+    3)
+        echo "❌ ERROR: the database is at an alembic revision this image does not know." >&2
+        echo "❌ ERROR: SKIPPING ALL MIGRATIONS and starting anyway. Resolve it by hand with alembic stamp." >&2
+        ;;
+    *)
+        echo "❌ ERROR: could not read the database's alembic revision; not starting the app" >&2
+        exit 1
+        ;;
+esac
 
 # Initialize database (create tables if needed)
 python3 -c "
