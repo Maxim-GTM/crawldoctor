@@ -64,9 +64,26 @@ jobs:
       - id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      # A re-run on a commit whose image was already pushed reuses it: ECR tags are immutable and a
+      # rebuild is rarely byte-identical, so pushing again would fail. BatchGetImage is in the deploy
+      # role's policy (DescribeImages is not).
+      - name: Check whether ECR already has this commit's image
+        id: image
+        run: |
+          digest=$(aws ecr batch-get-image --repository-name "$ECR_REPOSITORY" \
+            --image-ids imageTag="$GITHUB_SHA" --query 'images[0].imageId.imageDigest' --output text)
+          if [ -n "$digest" ] && [ "$digest" != "None" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "$ECR_REPOSITORY:$GITHUB_SHA is already in ECR ($digest): skipping build and push"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: docker/setup-buildx-action@v3
+        if: steps.image.outputs.exists != 'true'
 
       - name: Build and push
+        if: steps.image.outputs.exists != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
