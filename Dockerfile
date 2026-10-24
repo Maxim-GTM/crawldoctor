@@ -2,7 +2,8 @@
 # Single-machine Dockerfile for CrawlDoctor (Frontend + Backend).
 # On AWS it is built by GitHub Actions and runs on gtm-apps-1 behind Caddy (see deploy/).
 
-# Stage 1: Build React frontend
+# Stage 1: Build React frontend (build only: none of this stage ships in the final image).
+# 20.20.2 is the last Node 20 release.
 FROM node:20.20.2-bookworm-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 AS frontend-builder
 WORKDIR /frontend
 COPY frontend/package.json frontend/package-lock.json ./
@@ -11,7 +12,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # Stage 2: Python runtime
-FROM python:3.11.16-slim-bookworm@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b
+FROM python:3.11.17-slim-bookworm@sha256:f06d01d4ba3f8ad5af45a3ec87df19c1d317d8e8961edc0fabda61811af6f7cf
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -22,10 +23,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # PGSSLROOTCERT: the Neon URL uses sslmode=verify-full, and libpq otherwise looks for
 # ~/.postgresql/root.crt. Neon's certificate chains to a public CA in the Debian bundle.
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
+# Install system dependencies. upgrade pulls Debian security fixes newer than the base image
+# (openssl, perl, pcre2: F31). No compilers and no recommends: every requirement ships a
+# manylinux wheel, and gcc/g++ brought perl and dozens of libraries the app never uses.
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     curl \
     nginx \
     ca-certificates \
@@ -42,7 +43,8 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Install Python dependencies
-RUN pip install --no-cache-dir --upgrade pip && \
+# setuptools: the base image's copy vendors a vulnerable jaraco.context (CVE-2026-23949).
+RUN pip install --no-cache-dir --upgrade pip setuptools && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copy backend application code
