@@ -4,8 +4,10 @@ For each message:
   1. Check message_id in visit_events (idempotency) — ack + skip if already processed
   2. Call tracking_service.track_event() with message_id — creates session, visit, event
   3. On success: ack; if form_submit publishes to enrichment queue
-  4. On transient failure: republish with incremented x-retry-count header
-  5. After max_retries: publish to raw_events.dlq for manual inspection
+  4. On failure: republish with incremented x-retry-count header
+  5. After max_retries, or at once for a failure that would repeat on every
+     attempt (malformed payload, value the schema rejects): publish to
+     raw_events.dlq for manual inspection
 
 A dedicated channel is used (not the publisher pool) to set per-consumer prefetch.
 """
@@ -14,6 +16,7 @@ from typing import Any, Dict, Optional
 
 import aio_pika
 import structlog
+from sqlalchemy.exc import DataError
 
 from app.config import settings
 from app.database import AsyncSessionLocal
@@ -29,6 +32,21 @@ from app.services.tracking import TrackingService
 
 logger = structlog.get_logger()
 tracking_service = TrackingService()
+
+# Failures that repeat identically on every attempt: a value the schema rejects
+# (StringDataRightTruncation and friends are DataError), or a malformed message.
+# These go straight to the DLQ. Everything else is retried up to max_retries:
+# connection drops, and races between concurrent events of one new visitor
+# (IntegrityError, which the retry resolves through the message_id check).
+_PERMANENT_ERRORS = (DataError, KeyError, json.JSONDecodeError, UnicodeDecodeError)
+
+# Header values are stored in RabbitMQ; keep the reason short (the SQL error
+# text carries the whole parameter list).
+_FAILURE_REASON_MAX = 500
+
+
+def is_permanent(exc: BaseException) -> bool:
+    return isinstance(exc, _PERMANENT_ERRORS)
 
 
 class CoreConsumer:
@@ -67,19 +85,26 @@ class CoreConsumer:
             logger.error(
                 "CoreConsumer processing failed",
                 message_id=message.message_id,
-                error=str(exc),
+                error=str(exc)[:_FAILURE_REASON_MAX],
+                error_type=type(exc).__name__,
+                permanent=is_permanent(exc),
             )
             handled = await self._handle_failure(message, exc)
             try:
                 # Ack if we successfully re-published or DLQ'd the message — this
                 # prevents the queue's x-dead-letter-exchange from also routing the
                 # nack'd original to the DLQ (which would double-count every failure).
+                # nack(requeue=False) dead-letters it through the queue's DLX instead.
                 if handled:
                     await message.ack()
                 else:
                     await message.nack(requeue=False)
-            except Exception:
-                pass  # already acked/nacked
+            except Exception as ack_exc:
+                logger.warning(
+                    "CoreConsumer could not ack/nack failed message",
+                    message_id=message.message_id,
+                    error=str(ack_exc),
+                )
 
     async def _process(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         from app.models.visit import VisitEvent
@@ -96,7 +121,8 @@ class CoreConsumer:
                         logger.info("Skipping duplicate message", message_id=message_id)
                         return {}
                 except Exception:
-                    pass
+                    # A failed statement aborts the transaction; start clean.
+                    await self._safe_rollback(db, message_id)
 
             try:
                 result = await tracking_service.track_event(
@@ -122,8 +148,18 @@ class CoreConsumer:
                 )
                 return result
             except Exception:
-                await db.rollback()
+                await self._safe_rollback(db, message_id)
                 raise
+
+    @staticmethod
+    async def _safe_rollback(db, message_id: Optional[str]) -> None:
+        """Roll back without masking the original error: if the connection is
+        already broken, rollback() raises too, and the caller must still see
+        (and classify) the first exception."""
+        try:
+            await db.rollback()
+        except Exception as rb_exc:
+            logger.warning("CoreConsumer rollback failed", message_id=message_id, error=str(rb_exc))
 
     async def _publish_enrichment(
         self,
@@ -161,7 +197,7 @@ class CoreConsumer:
         headers = dict(message.headers or {})
         retry_count = int(headers.get("x-retry-count", 0))
 
-        if retry_count < settings.rabbitmq_max_retries:
+        if not is_permanent(exc) and retry_count < settings.rabbitmq_max_retries:
             headers["x-retry-count"] = retry_count + 1
             try:
                 assert self._events_exchange is not None
@@ -186,7 +222,7 @@ class CoreConsumer:
                 logger.error("Failed to republish for retry", error=str(publish_exc))
                 return False
         else:
-            headers["x-failure-reason"] = str(exc)
+            headers["x-failure-reason"] = f"{type(exc).__name__}: {exc}"[:_FAILURE_REASON_MAX]
             try:
                 assert self._dlx_exchange is not None
                 await self._dlx_exchange.publish(
@@ -200,9 +236,10 @@ class CoreConsumer:
                     routing_key=QUEUE_RAW_EVENTS_DLQ,
                 )
                 logger.error(
-                    "Event routed to DLQ after max retries",
+                    "Event routed to DLQ",
                     message_id=message.message_id,
                     retries=retry_count,
+                    error_type=type(exc).__name__,
                 )
                 return True
             except Exception as dlq_exc:
