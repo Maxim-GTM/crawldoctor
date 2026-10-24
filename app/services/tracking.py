@@ -9,10 +9,11 @@ from urllib.parse import urlparse, parse_qs
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import object_session
 import structlog
 
-from app.models.visit import Visit, VisitSession, VisitEvent
+from app.models.visit import Visit, VisitSession, VisitEvent, fit_to_columns
 from app.services.crawler_detection import CrawlerDetectionService, CrawlerDetectionResult
 from app.services.analytics import is_real_form_submit
 from app.services.event_batcher import event_batcher
@@ -22,6 +23,20 @@ from app.utils.domains import is_internal_domain, classify_domain
 from app.config import settings
 
 logger = structlog.get_logger()
+
+
+async def _rollback_and_reload(db: AsyncSession, *objs: Any) -> None:
+    """Roll back, then reload the rows the caller keeps using.
+
+    rollback() expires every persistent object. Reading an attribute of an
+    expired object afterwards makes SQLAlchemy load it synchronously, which on
+    an AsyncSession raises MissingGreenlet (F32). Objects inserted in the
+    rolled-back transaction become transient and keep their values.
+    """
+    await db.rollback()
+    for obj in objs:
+        if obj is not None and sa_inspect(obj).persistent:
+            await db.refresh(obj)
 
 
 class TrackingService:
@@ -418,7 +433,7 @@ class TrackingService:
                 if updated:
                     await db.refresh(existing_visit)
             except Exception:
-                await db.rollback()
+                await _rollback_and_reload(db, existing_visit)
             return existing_visit
 
         db.add(session)
@@ -668,8 +683,9 @@ class TrackingService:
             try:
                 await db.flush()
             except IntegrityError:
-                # Another concurrent worker inserted the same session — re-fetch it
-                await db.rollback()
+                # Another concurrent worker inserted the same session — re-fetch it.
+                # linked_visit was loaded before the rollback and must be reloaded too.
+                await _rollback_and_reload(db, linked_visit)
                 result = await db.execute(
                     select(VisitSession).where(VisitSession.id == effective_session_id)
                 )
@@ -762,7 +778,8 @@ class TrackingService:
                 await db.refresh(new_visit)
                 linked_visit = new_visit
             except Exception:
-                await db.rollback()
+                logger.warning("Failed to insert visit for event", exc_info=True)
+                await _rollback_and_reload(db, session_row)
 
         if linked_visit:
             effective_session_id = linked_visit.session_id
@@ -789,7 +806,8 @@ class TrackingService:
                         await db.commit()
                         await db.refresh(linked_visit)
                     except Exception:
-                        await db.rollback()
+                        await _rollback_and_reload(db, linked_visit, session_row)
+                        effective_session_id = linked_visit.session_id
 
         if effective_session_id != session_id:
             result = await db.execute(select(VisitSession).where(VisitSession.id == effective_session_id))
@@ -935,7 +953,7 @@ class TrackingService:
                 if changed:
                     await db.commit()
             except Exception:
-                await db.rollback()
+                await _rollback_and_reload(db, session_row)
 
         event_country = None
         event_city = None
@@ -1030,6 +1048,7 @@ class TrackingService:
             "client_side_connection_type": client_side_data.get('connection_type') if client_side_data else None,
             "message_id": message_id,
         }
+        event_payload = fit_to_columns(VisitEvent.__table__, event_payload)
         if occurred_at:
             try:
                 event_payload["timestamp"] = datetime.fromisoformat(occurred_at)
@@ -1048,7 +1067,7 @@ class TrackingService:
                 await db.refresh(event)
                 event_id = event.id
             except IntegrityError:
-                await db.rollback()
+                await _rollback_and_reload(db, linked_visit, session_row)
                 logger.info("Duplicate form_submit message_id skipped", message_id=message_id)
             if not settings.rabbitmq_enabled:
                 try:
@@ -1099,7 +1118,7 @@ class TrackingService:
                     await db.commit()
             except Exception as e:
                 logger.error("Failed to backfill visit client-side data", error=str(e), visit_id=linked_visit.id if linked_visit else None)
-                await db.rollback()
+                await _rollback_and_reload(db, linked_visit, session_row)
 
         logger.info(
             "Event tracked",

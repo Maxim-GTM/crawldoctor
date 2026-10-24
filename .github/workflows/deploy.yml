@@ -45,6 +45,19 @@ jobs:
             sleep 1 &&
             curl -sf -o /dev/null http://127.0.0.1:8000/ &&
             echo "nginx ok as $(id -un)"'
+      # The dependency upgrades (FastAPI/Starlette 1.x, PyJWT) must at least import and route.
+      - name: Smoke test the Python app imports
+        run: |
+          docker run --rm --entrypoint python crawldoctor:ci -c '
+          import app.main, app.mq.consumers.core_consumer, app.services.auth
+          print("routes:", len(app.main.app.routes))'
+      # Advisory only (never fails the build): critical/high CVEs in the image this PR builds.
+      # Inspector scans the pushed image after deploy; this shows the count before merging.
+      - name: Scan image for critical/high CVEs (trivy, advisory)
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa \
+            image --scanners vuln --severity CRITICAL,HIGH --no-progress --exit-code 0 crawldoctor:ci
 
   deploy:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'

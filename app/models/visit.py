@@ -2,9 +2,10 @@
 from datetime import datetime, timezone
 from sqlalchemy import (
     Column, Integer, String, DateTime, Boolean, Text, Float,
-    JSON, BigInteger, ForeignKey, func
+    JSON, BigInteger, ForeignKey, event, func
 )
 from sqlalchemy.orm import relationship
+import structlog
 from app.database import Base
 
 
@@ -174,3 +175,44 @@ class VisitEvent(Base):
     # Relationships
     session = relationship("VisitSession", backref="events")
     visit = relationship("Visit", backref="events")
+
+
+def fit_to_columns(table, values: dict) -> dict:
+    """Return values with each string cut to its varchar column's length.
+
+    Most of these values come from visitors' browsers (URL query, referrer,
+    tracker payload): one oversized utm_source must not abort the insert and
+    drop the event. Used directly for Core inserts (the event batcher), and by
+    the ORM hook below for everything else.
+    """
+    fitted = dict(values)
+    for key, value in values.items():
+        if not isinstance(value, str) or key not in table.c:
+            continue
+        max_len = getattr(table.c[key].type, "length", None)
+        if max_len and len(value) > max_len:
+            fitted[key] = value[:max_len]
+            _log_truncation(table.name, key, len(value), max_len)
+    return fitted
+
+
+def _log_truncation(table_name: str, column: str, length: int, max_len: int) -> None:
+    # The value itself is visitor input (possibly personal data): log its size only.
+    structlog.get_logger().info(
+        "Truncated value to fit column", table=table_name, column=column, length=length, max_length=max_len,
+    )
+
+
+def _fit_string_attrs(mapper, connection, target) -> None:
+    for attr in mapper.column_attrs:
+        # __dict__ holds only loaded values, so this never triggers a lazy load.
+        value = target.__dict__.get(attr.key)
+        max_len = getattr(attr.columns[0].type, "length", None)
+        if isinstance(value, str) and max_len and len(value) > max_len:
+            setattr(target, attr.key, value[:max_len])
+            _log_truncation(mapper.local_table.name, attr.key, len(value), max_len)
+
+
+for _model in (VisitSession, Visit, VisitEvent):
+    event.listen(_model, "before_insert", _fit_string_attrs)
+    event.listen(_model, "before_update", _fit_string_attrs)
