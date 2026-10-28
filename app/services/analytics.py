@@ -985,12 +985,28 @@ class AnalyticsService:
             "total_pages": 0
         }
 
+    _EXACT_COUNT_MAX_ROWS = 100_000
+
+    def _row_count(self, db: Session, model) -> int:
+        """Exact count for small tables; the planner's estimate (kept fresh by autovacuum) for big ones.
+
+        count(*) over the 2.3M visit_sessions rows is a 3 s seq scan; pagination doesn't need it exact.
+        """
+        if db.get_bind().dialect.name == "postgresql":
+            estimate = db.execute(
+                text("SELECT reltuples::bigint FROM pg_class WHERE oid = to_regclass(:table)"),
+                {"table": model.__tablename__},
+            ).scalar()
+            if estimate and estimate > self._EXACT_COUNT_MAX_ROWS:
+                return int(estimate)
+        return db.query(func.count()).select_from(model).scalar() or 0
+
     def list_sessions(self, db: Session, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
         """List sessions with summary info - OPTIMIZED for large datasets."""
         try:
             # Fast count with estimation for pagination
             if offset == 0:
-                total = db.query(func.count(VisitSession.id)).scalar() or 0
+                total = self._row_count(db, VisitSession)
             else:
                 total = offset + limit + 100  # Estimate for speed
             
