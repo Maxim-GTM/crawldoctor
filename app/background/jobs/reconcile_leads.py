@@ -21,8 +21,9 @@ class ReconcileLeads:
     Missing rows: a recompute_journey job was lost (e.g. server restart) after the
     watermark already advanced past their events. No lead_type: leads written before
     recompute_journey classified them (everything after 2026-08-26); recomputing fills
-    it in, 500 leads per sweep. The sweep ignores `since` — it always does a full
-    consistency check.
+    it in, 500 leads per sweep. Duplicate form fills: two workers recomputed the same
+    client at once (before recompute_journey took a per-client lock). The sweep ignores
+    `since` — it always does a full consistency check.
     """
 
     def sweep(self, db: Session, since: datetime) -> List[Dict[str, Any]]:
@@ -31,7 +32,14 @@ class ReconcileLeads:
             FROM journey_summaries js
             LEFT JOIN lead_summaries ls ON ls.client_id = js.client_id
             WHERE js.has_captured_data = 1
-              AND (ls.client_id IS NULL OR ls.lead_type IS NULL)
+              AND (ls.client_id IS NULL
+                   OR ls.lead_type IS NULL
+                   OR EXISTS (
+                       SELECT 1 FROM journey_form_fills f
+                       WHERE f.client_id = js.client_id AND f.visit_event_id IS NOT NULL
+                       GROUP BY f.visit_event_id
+                       HAVING count(*) > 1
+                   ))
             LIMIT 500
         """)).fetchall()
 

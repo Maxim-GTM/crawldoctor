@@ -147,3 +147,30 @@ def test_reconcile_picks_up_unclassified_leads(db):
 
     payloads = ReconcileLeads().sweep(db, since=AFTER_MERGE)
     assert sorted(p["client_id"] for p in payloads) == ["missing", "unclassified"]
+
+
+def test_reconcile_repairs_duplicated_form_fills(db):
+    # Two workers recomputing one client at once inserted its fills twice (2026-10-28).
+    for client_id, copies in (("clean", 1), ("doubled", 2)):
+        db.add(JourneySummary(client_id=client_id, has_captured_data=1))
+        db.add(LeadSummary(client_id=client_id, lead_type=DEMO_BIFROST))
+        for _ in range(copies):
+            db.add(JourneyFormFill(client_id=client_id, visit_event_id=7, timestamp=AFTER_MERGE))
+    db.commit()
+
+    payloads = ReconcileLeads().sweep(db, since=AFTER_MERGE)
+    assert [p["client_id"] for p in payloads] == ["doubled"]
+
+
+def test_recompute_replaces_duplicated_fills(db):
+    db.add(VisitSession(id="s1", ip_address="192.0.2.1", user_agent="ua", client_id="c1"))
+    _submit(db, "c1", "https://www.getmaxim.ai/book-a-demo", DEMO_FORM, AFTER_MERGE)
+    db.commit()
+    RecomputeJourney().handle(db, {"client_id": "c1"})
+    event_id = db.query(JourneyFormFill).one().visit_event_id
+    db.add(JourneyFormFill(client_id="c1", visit_event_id=event_id, timestamp=AFTER_MERGE))
+    db.commit()
+
+    RecomputeJourney().handle(db, {"client_id": "c1"})
+
+    assert db.query(JourneyFormFill).filter_by(client_id="c1").count() == 1

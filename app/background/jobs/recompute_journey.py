@@ -6,6 +6,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 import structlog
 
@@ -41,6 +42,9 @@ _FORM_ACTION_MAX = JourneyFormFill.__table__.c.form_action.type.length
 _REFERRER_DOMAIN_MAX = LeadSummary.__table__.c.first_referrer_domain.type.length
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# First key of the two-key advisory lock taken per client_id, apart from other advisory locks.
+_RECOMPUTE_LOCK_NS = 0x4C454144  # "LEAD"
 
 
 def _fit(value: Any, max_len: int) -> Optional[str]:
@@ -161,6 +165,15 @@ class RecomputeJourney:
     def handle(self, db: Session, payload: Dict[str, Any]) -> None:
         """Full recompute of summaries for one client_id."""
         client_id = payload["client_id"]
+
+        # Each app worker runs the sweeps, so two workers can recompute the same client at
+        # once; both would delete its form fills and both insert them again (duplicate rows).
+        # The lock queues the second until the first commits.
+        if db.get_bind().dialect.name == "postgresql":
+            db.execute(
+                text("SELECT pg_advisory_xact_lock(:ns, hashtext(:client_id))"),
+                {"ns": _RECOMPUTE_LOCK_NS, "client_id": client_id},
+            )
 
         # Fetch all visits for this client
         visits = (
