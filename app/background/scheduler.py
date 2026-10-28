@@ -18,6 +18,17 @@ from sqlalchemy import text
 logger = structlog.get_logger()
 
 
+def _as_utc(ts: datetime) -> datetime:
+    return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+
+
+def swept_recently(last_processed_at: Optional[datetime], now: datetime, interval_minutes: int) -> bool:
+    """True when the job's watermark says a sweep started less than an interval before `now`."""
+    if last_processed_at is None:
+        return False
+    return now - _as_utc(last_processed_at) < timedelta(minutes=interval_minutes)
+
+
 class JobScheduler:
     """Periodically fires sweep functions for registered jobs.
 
@@ -86,6 +97,28 @@ class JobScheduler:
         h = hashlib.md5(job_name.encode()).hexdigest()
         return int(h[:8], 16)
 
+    def _try_lock(self, db, lock_id: int):
+        """Take the sweep's advisory lock on a connection of its own; None if another worker has it.
+
+        Not through the Session: it hands its connection back to the pool on commit, so the
+        unlock could go out on a different connection and leave the lock held until the pool
+        recycles the first one, skipping this sweep in every other connection meanwhile.
+        """
+        conn = db.get_bind().connect()
+        acquired = conn.execute(text("SELECT pg_try_advisory_lock(:lock_id)"), {"lock_id": lock_id}).scalar()
+        conn.commit()  # a session-level advisory lock outlives the transaction
+        if not acquired:
+            conn.close()
+            return None
+        return conn
+
+    def _unlock(self, conn, lock_id: int) -> None:
+        try:
+            conn.execute(text("SELECT pg_advisory_unlock(:lock_id)"), {"lock_id": lock_id})
+            conn.commit()
+        finally:
+            conn.close()
+
     def _run_sweep(self, job: RegisteredJob, loop: asyncio.AbstractEventLoop) -> None:
         """Execute one sweep: lock -> read watermark -> sweep -> enqueue -> advance watermark."""
         db = SessionLocal()
@@ -93,11 +126,8 @@ class JobScheduler:
             lock_id = self._advisory_lock_id(job.name)
 
             # Try advisory lock — skip if another worker holds it
-            acquired = db.execute(
-                text("SELECT pg_try_advisory_lock(:lock_id)"), {"lock_id": lock_id}
-            ).scalar()
-
-            if not acquired:
+            lock = self._try_lock(db, lock_id)
+            if lock is None:
                 logger.debug("Sweep skipped (lock held)", job_name=job.name)
                 return
 
@@ -108,6 +138,13 @@ class JobScheduler:
                 state = db.query(BackgroundJobState).filter(
                     BackgroundJobState.job_name == job.name
                 ).first()
+
+                # Every app worker runs this scheduler. A sweep another worker (or the previous
+                # container) ran less than an interval ago would enqueue the same jobs twice.
+                if state and swept_recently(state.last_processed_at, sweep_time, job.sweep_interval_minutes):
+                    self._last_run[job.name] = _as_utc(state.last_processed_at)
+                    logger.debug("Sweep skipped (another worker ran it)", job_name=job.name)
+                    return
 
                 if state:
                     since = state.last_processed_at
@@ -152,8 +189,7 @@ class JobScheduler:
 
             finally:
                 # Release advisory lock
-                db.execute(text("SELECT pg_advisory_unlock(:lock_id)"), {"lock_id": lock_id})
-                db.commit()
+                self._unlock(lock, lock_id)
 
         except Exception as exc:
             logger.error("Sweep error", job_name=job.name, error=str(exc), exc_info=True)
