@@ -19,6 +19,7 @@ class JourneyFormFill(Base):
     filled_fields = Column(Integer, nullable=True)
     form_id = Column(String(255), nullable=True)
     form_action = Column(String(2000), nullable=True)
+    form_type = Column(String(50), nullable=True, index=True)  # app/services/lead_classification.py
 
 class LeadSummary(Base):
     """Pre-computed lead data for fast retrieval."""
@@ -43,11 +44,15 @@ class LeadSummary(Base):
     campaign = Column(String(100), index=True)
     first_referrer = Column(String(2000))
     first_referrer_domain = Column(String(200), index=True)
-    
+
+    # Classification: the most valuable type among the form fills, and all of them, comma-separated
+    lead_type = Column(String(50), index=True)
+    form_types = Column(String(500))
+
     # Timestamps
     first_seen = Column(DateTime(timezone=True), index=True)
     last_seen = Column(DateTime(timezone=True), index=True)
-    
+
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class JourneySummary(Base):

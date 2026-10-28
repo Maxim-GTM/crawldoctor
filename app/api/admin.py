@@ -165,8 +165,8 @@ async def enrich_ips(
 ):
     """Backfill IP enrichment for historical visitor IPs.
 
-    Capped by max_batches to protect the free-plan monthly quota.
-    Each batch processes up to ip_enrichment_batch_size IPs (default 25).
+    Each batch processes up to ip_enrichment_batch_size IPs (default 40), and no batch goes
+    past ip_enrichment_daily_limit lookups for the day.
     """
     require_permission(current_user, "admin")
 

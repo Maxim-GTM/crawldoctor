@@ -19,7 +19,7 @@ from app.services.analytics import is_real_form_submit
 from app.services.event_batcher import event_batcher
 from app.background.runner import job_runner
 from app.services.geo import GeoLocationService
-from app.utils.domains import is_internal_domain, classify_domain
+from app.utils.domains import is_internal_domain, classify_domain, referrer_attribution
 from app.config import settings
 
 logger = structlog.get_logger()
@@ -79,6 +79,8 @@ class TrackingService:
         if referrer_domain:
             if is_internal_domain(referrer_domain):
                 return False
+            if page_domain and referrer_domain.lower() == page_domain.lower():
+                return False  # same-site navigation on a host outside the internal families
             return True
 
         if source:
@@ -223,8 +225,14 @@ class TrackingService:
         except Exception:
             return {}
 
-    def _extract_utm(self, page_info: Dict[str, Any], referrer: Optional[str]) -> Dict[str, Optional[str]]:
-        utm = {"source": None, "medium": None, "campaign": None}
+    def _extract_utm(self, page_info: Dict[str, Any], referrer: Optional[str]) -> Dict[str, Any]:
+        """Attribution from the page's UTM parameters, else from its referrer.
+
+        internal_referral is True when the page was reached from another Maxim/Bifrost page:
+        track_event then gives it its session's entry attribution instead of a self-referral
+        (www.getmaxim.ai as source).
+        """
+        utm = {"source": None, "medium": None, "campaign": None, "internal_referral": False}
         try:
             q = page_info.get("query_params") or {}
             if isinstance(q, dict):
@@ -234,12 +242,38 @@ class TrackingService:
         except Exception:
             pass
         if not utm["source"] and referrer:
-            try:
-                r = urlparse(referrer)
-                utm["source"] = r.netloc
-            except Exception:
-                pass
+            source, medium, internal = referrer_attribution(referrer, page_info.get("domain"))
+            utm["source"] = source
+            utm["medium"] = utm["medium"] or medium
+            utm["internal_referral"] = internal
         return utm
+
+    async def _session_attribution(self, db: AsyncSession, session_id: str) -> Optional[Dict[str, Optional[str]]]:
+        """Source, medium and campaign of the session's first visit, or None for a new session."""
+        result = await db.execute(
+            select(Visit.source, Visit.medium, Visit.campaign)
+            .where(Visit.session_id == session_id)
+            .order_by(Visit.timestamp.asc())
+            .limit(1)
+        )
+        row = result.first()
+        if row is None:
+            return None
+        return {"source": row.source, "medium": row.medium, "campaign": row.campaign}
+
+    @staticmethod
+    def _normalize_event(event_type: str, data: Optional[Dict[str, Any]]):
+        """One event type for navigation.
+
+        The tracker used to send the page-unload event as 'navigate' and SPA route changes as
+        'navigation'; trackers cached on sites still do. Both are stored as 'navigation', with
+        data.kind 'unload' or 'spa'.
+        """
+        if event_type not in ("navigate", "navigation"):
+            return event_type, data
+        data = dict(data) if isinstance(data, dict) else {}
+        data.setdefault("kind", "unload" if event_type == "navigate" else "spa")
+        return "navigation", data
 
     def _categorize_visitor(self, user_agent: str) -> Dict[str, Any]:
         detection_result = self.crawler_detector.detect_crawler(user_agent)
@@ -518,6 +552,7 @@ class TrackingService:
         occurred_at: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Track fine-grained events like scroll, click, navigation."""
+        event_type, data = self._normalize_event(event_type, data)
         if event_type == 'form_submit' and data:
             data_str = str(data)
             if 'timingsV2' in data_str or 'memory.totalJSHeapSize' in data_str or 'eventType' in data_str:
@@ -577,6 +612,13 @@ class TrackingService:
                 session_id = merged.id
 
         effective_session_id = session_id
+
+        # A page reached from another of our pages keeps the session's entry attribution, so
+        # internal links don't overwrite the source with www.getmaxim.ai.
+        if utm_info.get("internal_referral") and existing_session and not is_external:
+            inherited = await self._session_attribution(db, session_id)
+            if inherited:
+                utm_info.update(inherited)
 
         linked_visit: Optional[Visit] = None
         if visit_id:
