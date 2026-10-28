@@ -11,6 +11,8 @@ downloads/
 eggs/
 .eggs/
 lib/
+# …but not the dashboard's own source folder
+!frontend/src/lib/
 lib64/
 parts/
 sdist/
