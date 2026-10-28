@@ -11,6 +11,7 @@ import structlog
 from app.config import settings
 from app.database import get_async_db
 from app.services.tracking import TrackingService
+from app.utils.domains import is_allowed_tracking_url
 from app.utils.rate_limiting import RateLimiter
 
 logger = structlog.get_logger()
@@ -112,13 +113,29 @@ async def track_json(
     )
 
 
+def _tracking_cors_headers(request: Request) -> dict:
+    """Let tracked pages read /track/event responses.
+
+    The tracker sends form_submit with fetch() and retries when the response can't be read.
+    Without these headers every form_submit from a page outside cors_origins (the dashboard's
+    list) looked like a network failure and was delivered up to four times.
+    """
+    origin = request.headers.get("origin")
+    if origin and is_allowed_tracking_url(origin, settings.tracking_allowed_domains):
+        return {"Access-Control-Allow-Origin": origin, "Vary": "Origin"}
+    return {}
+
+
 @router.post("/event")
 async def track_event(
     request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_async_db),
     tid: Optional[str] = Query(None, description="Tracking ID")
 ):
     """Record granular client-side events (click, scroll, navigation, etc.)."""
+    cors_headers = _tracking_cors_headers(request)
+    response.headers.update(cors_headers)
     try:
         client_ip = _get_client_ip(request)
         if not await rate_limiter.is_allowed(client_ip, "event_track"):
@@ -141,7 +158,7 @@ async def track_event(
                     )
             except Exception:
                 pass
-            return Response(content="Rate limited", status_code=429)
+            return Response(content="Rate limited", status_code=429, headers=cors_headers)
 
         # Support both JSON and text/plain bodies
         try:
@@ -162,7 +179,14 @@ async def track_event(
 
         if not event_type:
             logger.debug("Dropped event: missing event_type", ip=client_ip)
-            return Response(status_code=204)
+            return Response(status_code=204, headers=cors_headers)
+
+        # Only our own sites: not localhost, preview deployments, GTM preview, third parties
+        # that copied the snippet, or pages with no URL.
+        if not is_allowed_tracking_url(page_url, settings.tracking_allowed_domains):
+            logger.debug("Dropped event: page outside tracking_allowed_domains",
+                         page_url=str(page_url)[:200] if page_url else None)
+            return Response(status_code=204, headers=cors_headers)
 
         # Privacy: we no longer ingest per-keystroke form_input events. They
         # carry raw field values (PII) and are redundant — form_submit already
@@ -170,7 +194,7 @@ async def track_event(
         # trackers already deployed/cached on customer sites stop populating the
         # DB without needing an update on those sites.
         if event_type == "form_input":
-            return Response(status_code=204)
+            return Response(status_code=204, headers=cors_headers)
 
         user_agent = request.headers.get("user-agent", "")
 
@@ -227,6 +251,7 @@ async def track_event(
             content=json.dumps({"status": "error", "message": str(e) or type(e).__name__}),
             media_type="application/json",
             status_code=503,
+            headers=cors_headers,
         )
 
 

@@ -152,14 +152,41 @@ class Settings(BaseSettings):
     )
     export_api_enabled: bool = Field(default=True, description="Enable external API access to exports")
 
-    # IP Enrichment (ipapi.is — no API key required)
+    # IP Enrichment (ipapi.is)
     ip_enrichment_enabled: bool = Field(default=True, description="Enable IP enrichment")
-    ip_enrichment_batch_size: int = Field(default=25, description="IPs per enrichment run (keep low on free plan)")
+    ip_enrichment_api_key: Optional[str] = Field(
+        default=None,
+        description=(
+            "ipapi.is API key. A free account gives 1,000 lookups a day with company domain, type "
+            "and network flags. Without a key: 30 lookups a day per server IP, company name only"
+        ),
+    )
+    ip_enrichment_daily_limit: int = Field(default=1000, description="Max lookups per UTC day (capped at 25 without a key)")
+    ip_enrichment_batch_size: int = Field(default=40, description="IPs per enrichment run")
     ip_enrichment_ttl_days: int = Field(default=30, description="Days before re-enriching an IP")
     ip_enrichment_max_rps: float = Field(default=1.0, description="Max API requests per second")
-    ip_enrichment_max_attempts: int = Field(default=3, description="Max enrichment attempts before marking failed")
+    ip_enrichment_lookback_days: int = Field(default=30, description="Only enrich IPs of visitors seen this recently")
+    ip_enrichment_retry_base_minutes: int = Field(
+        default=60, description="Wait after a transient error; doubles per consecutive error, up to 7 days"
+    )
+    ip_enrichment_priority_paths: list[str] = Field(
+        default=["/pricing", "/enterprise", "/book-a-demo", "/contact"],
+        description="Visitors of these pages are enriched first (after leads); matched as path segments",
+    )
+    ip_enrichment_max_attempts: int = Field(
+        default=3, description="Unused: transient errors now retry with backoff. Kept so existing env files load"
+    )
     ip_enrichment_interval_minutes: int = Field(default=60, description="Incremental enrichment job interval (minutes)")
-    
+
+    # Tracking ingestion
+    tracking_allowed_domains: list[str] = Field(
+        default=["getmaxim.ai", "getbifrost.ai", "maxim-articles.ghost.io"],
+        description=(
+            "Only record events from pages on these hosts or their subdomains, on the default port. "
+            "An empty list accepts every page"
+        ),
+    )
+
     class Config:
         env_file = ".env"
         env_prefix = "CRAWLDOCTOR_"

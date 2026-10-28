@@ -13,6 +13,7 @@ from app.background.registry import registry
 from app.models.summary import JourneyFormFill, JourneySummary, LeadSummary
 from app.models.visit import Visit, VisitEvent
 from app.services.analytics import is_real_form_submit
+from app.services.lead_classification import classify_form_fill, summarize_lead
 
 logger = structlog.get_logger()
 
@@ -258,12 +259,18 @@ class RecomputeJourney:
             db.add(journey)
 
         # --- Insert JourneyFormFill rows ---
+        form_types = []
         for ev in real_events:
             ed = ev.event_data or {}
             fv = ed.get("form_values") or ed.get("values") or {}
             filled = ed.get("filled_fields")
             if filled is None and isinstance(fv, dict):
                 filled = len(fv)
+            form_type = classify_form_fill(
+                ev.page_url, ev.path, fv, form_id=ed.get("id"), form_action=ed.get("action"),
+                timestamp=ev.timestamp,
+            )
+            form_types.append(form_type)
             db.add(JourneyFormFill(
                 client_id=client_id,
                 visit_event_id=ev.id,
@@ -274,7 +281,9 @@ class RecomputeJourney:
                 filled_fields=filled,
                 form_id=_fit(ed.get("id"), _FORM_ID_MAX),
                 form_action=_fit(ed.get("action"), _FORM_ACTION_MAX),
+                form_type=form_type,
             ))
+        lead_type, form_types_csv = summarize_lead(form_types)
 
         # --- Upsert LeadSummary (first form fill, backwards compat) ---
         lead = db.query(LeadSummary).filter(LeadSummary.client_id == client_id).first()
@@ -296,6 +305,8 @@ class RecomputeJourney:
             lead.campaign = journey.campaign
             lead.first_referrer = first_visit.referrer if first_visit else None
             lead.first_referrer_domain = _fit(_extract_domain(first_visit.referrer), _REFERRER_DOMAIN_MAX) if first_visit and first_visit.referrer else None
+            lead.lead_type = lead_type
+            lead.form_types = form_types_csv
             lead.first_seen = first_seen
             lead.last_seen = last_seen
         else:
@@ -313,6 +324,8 @@ class RecomputeJourney:
                 campaign=journey.campaign,
                 first_referrer=first_visit.referrer if first_visit else None,
                 first_referrer_domain=_fit(_extract_domain(first_visit.referrer), _REFERRER_DOMAIN_MAX) if first_visit and first_visit.referrer else None,
+                lead_type=lead_type,
+                form_types=form_types_csv,
                 first_seen=first_seen,
                 last_seen=last_seen,
             )
