@@ -13,6 +13,7 @@ from app.models.visit import Visit, VisitSession, VisitEvent
 from app.models.funnel import FunnelConfig
 from app.models.summary import LeadSummary, JourneySummary, JourneyFormFill
 from app.config import settings
+from app.services.reports import company_from_form, contains
 
 logger = structlog.get_logger()
 
@@ -876,13 +877,40 @@ class AnalyticsService:
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
         max_retries: int = 3,
+        visitor: Optional[str] = None,
+        path: Optional[str] = None,
+        source: Optional[str] = None,
+        country: Optional[str] = None,
+        domain: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Get recent visitor activity with pagination - optimized for large datasets with retry logic."""
+        """Get recent visitor activity with pagination - optimized for large datasets with retry logic.
+
+        visitor is "human", "bot" or one crawler_type; path and source match anywhere in the value.
+        """
         from sqlalchemy.orm import joinedload
         
         # Default to last 7 days to avoid full table scans if no range is provided
+        # (the text filters below rely on this bound too)
         if not start_date and not end_date:
             start_date = datetime.now(timezone.utc) - timedelta(days=7)
+        elif not start_date:
+            start_date = end_date - timedelta(days=7)
+
+        visit_filters = []
+        if visitor == "human":
+            visit_filters.append(Visit.is_bot == False)
+        elif visitor == "bot":
+            visit_filters.append(Visit.is_bot == True)
+        elif visitor:
+            visit_filters.append(Visit.crawler_type == visitor)
+        if path:
+            visit_filters.append(contains(Visit.path, path))
+        if source:
+            visit_filters.append(contains(Visit.source, source))
+        if country:
+            visit_filters.append(Visit.country == country.upper())
+        if domain:
+            visit_filters.append(Visit.page_domain == domain)
         
         # Try to get data with retries
         for attempt in range(max_retries):
@@ -894,6 +922,8 @@ class AnalyticsService:
                     query = query.filter(Visit.timestamp >= start_date)
                 if end_date:
                     query = query.filter(Visit.timestamp <= end_date)
+                if visit_filters:
+                    query = query.filter(*visit_filters)
 
                 if offset == 0:
                     # Only get exact count on first page
@@ -1001,17 +1031,56 @@ class AnalyticsService:
                 return int(estimate)
         return db.query(func.count()).select_from(model).scalar() or 0
 
-    def list_sessions(self, db: Session, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
-        """List sessions with summary info - OPTIMIZED for large datasets."""
+    def list_sessions(
+        self,
+        db: Session,
+        limit: int = 50,
+        offset: int = 0,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        visitor: Optional[str] = None,
+        country: Optional[str] = None,
+        referrer: Optional[str] = None,
+        has_client_id: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """List sessions with summary info - OPTIMIZED for large datasets.
+
+        Dates bound last_visit. visitor is "human" or "bot" (a session with any such page view);
+        referrer matches anywhere in the entry referrer's domain, "direct" means none.
+        """
         try:
+            query = db.query(VisitSession)
+            filters = []
+            if start_date:
+                filters.append(VisitSession.last_visit >= start_date)
+            if end_date:
+                filters.append(VisitSession.last_visit <= end_date)
+            if visitor in ("human", "bot"):
+                filters.append(
+                    select(Visit.id)
+                    .where(Visit.session_id == VisitSession.id, Visit.is_bot == (visitor == "bot"))
+                    .exists()
+                )
+            if country:
+                filters.append(VisitSession.country == country.upper())
+            if referrer == "direct":
+                filters.append(VisitSession.entry_referrer_domain.is_(None))
+            elif referrer:
+                filters.append(contains(VisitSession.entry_referrer_domain, referrer))
+            if has_client_id is True:
+                filters.append(VisitSession.client_id.isnot(None))
+            elif has_client_id is False:
+                filters.append(VisitSession.client_id.is_(None))
+            query = query.filter(*filters)
+
             # Fast count with estimation for pagination
             if offset == 0:
-                total = self._row_count(db, VisitSession)
+                total = (query.count() if filters else self._row_count(db, VisitSession)) or 0
             else:
                 total = offset + limit + 100  # Estimate for speed
             
             # Single optimized query with only what we need
-            sessions = db.query(VisitSession).order_by(desc(VisitSession.last_visit)).offset(offset).limit(limit).all()
+            sessions = query.order_by(desc(VisitSession.last_visit)).offset(offset).limit(limit).all()
             
             # Batch-fetch all visit data for these sessions in ONE query (massive speedup)
             session_ids = [s.id for s in sessions]
@@ -1071,7 +1140,8 @@ class AnalyticsService:
                     "client_side_screen_resolution": s.client_side_screen_resolution or "",
                     "client_side_viewport_size": s.client_side_viewport_size or "",
                     "client_side_device_memory": s.client_side_device_memory or "",
-                    "client_side_connection_type": s.client_side_connection_type or ""
+                    "client_side_connection_type": s.client_side_connection_type or "",
+                    "entry_referrer_domain": s.entry_referrer_domain or "",
                 })
             return {
                 "sessions": data,
@@ -2080,6 +2150,13 @@ class AnalyticsService:
             
         return attribution
 
+    JOURNEY_SORTS = {
+        "last_seen": JourneySummary.last_seen,
+        "first_seen": JourneySummary.first_seen,
+        "visit_count": JourneySummary.visit_count,
+        "form_fill_count": JourneySummary.form_fill_count,
+    }
+
     def list_journey_summaries(
         self,
         db: Session,
@@ -2088,9 +2165,16 @@ class AnalyticsService:
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
         limit: int = 50,
-        offset: int = 0
+        offset: int = 0,
+        source: Optional[str] = None,
+        campaign: Optional[str] = None,
+        sort: Optional[str] = None,
+        order: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """List journeys from pre-computed summary table."""
+        """List journeys from pre-computed summary table.
+
+        sort is last_seen (default), first_seen, visit_count or form_fill_count; order is asc or desc.
+        """
         try:
             query = db.query(JourneySummary)
             
@@ -2102,9 +2186,17 @@ class AnalyticsService:
             
             if with_captured_only:
                 query = query.filter(JourneySummary.has_captured_data == 1)
+            # Rows store a missing source/campaign as NULL; the list shows them as "direct" / "none"
+            if source:
+                query = query.filter(func.lower(func.coalesce(JourneySummary.source, "direct")) == source.lower())
+            if campaign:
+                query = query.filter(func.lower(func.coalesce(JourneySummary.campaign, "none")) == campaign.lower())
+
+            sort_col = self.JOURNEY_SORTS.get(sort or "last_seen", JourneySummary.last_seen)
+            ordering = sort_col.asc().nullsfirst() if order == "asc" else sort_col.desc().nullslast()
 
             total = query.count()
-            rows = query.order_by(JourneySummary.last_seen.desc()).offset(offset).limit(limit).all()
+            rows = query.order_by(ordering, JourneySummary.client_id).offset(offset).limit(limit).all()
 
             journeys = []
             for r in rows:
@@ -2148,14 +2240,24 @@ class AnalyticsService:
         end_date: Optional[datetime] = None,
         limit: int = 50,
         offset: int = 0,
+        q: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """List leads from pre-computed summary table."""
+        """List leads from pre-computed summary table.
+
+        q matches the lead's name, email or anything they typed into the form (e.g. their company).
+        """
         try:
             query = db.query(LeadSummary)
             
             if start_date: query = query.filter(LeadSummary.last_seen >= start_date)
             if end_date: query = query.filter(LeadSummary.last_seen <= end_date)
             if captured_path: query = query.filter(LeadSummary.captured_path.ilike(f"{captured_path}%"))
+            if q and q.strip():
+                term = q.strip()
+                query = query.filter(or_(
+                    contains(LeadSummary.email, term), contains(LeadSummary.name, term),
+                    contains(LeadSummary.captured_data, term), LeadSummary.client_id == term,
+                ))
             if source: query = query.filter(func.lower(LeadSummary.source) == source.lower())
             if medium: query = query.filter(func.lower(LeadSummary.medium) == medium.lower())
             if campaign: query = query.filter(func.lower(LeadSummary.campaign) == campaign.lower())
@@ -2177,6 +2279,7 @@ class AnalyticsService:
                     "campaign": r.campaign or "none",
                     "form_data_shared": r.form_data_shared,
                     "captured_data": r.captured_data,
+                    "company": company_from_form(r.captured_data),
                 })
                 
             return {
@@ -2275,10 +2378,12 @@ class AnalyticsService:
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
         limit: int = 200000,
+        q: Optional[str] = None,
     ):
         """Export captured leads as a generator."""
         data = self.list_leads(
             db,
+            q=q,
             captured_path=captured_path,
             source=source,
             medium=medium,
@@ -2302,6 +2407,27 @@ class AnalyticsService:
                 "campaign": row.get("campaign") or "",
                 "form_values": json.dumps(row.get("form_values")) if row.get("form_values") else "",
             }
+
+    def export_journey_summaries(
+        self,
+        db: Session,
+        target_path: Optional[str] = None,
+        with_captured_only: bool = False,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        source: Optional[str] = None,
+        campaign: Optional[str] = None,
+        sort: Optional[str] = None,
+        order: Optional[str] = None,
+        limit: int = 200000,
+    ):
+        """Export journey summaries as a generator, with the list's filters and order."""
+        data = self.list_journey_summaries(
+            db, target_path=target_path, with_captured_only=with_captured_only, start_date=start_date,
+            end_date=end_date, source=source, campaign=campaign, sort=sort, order=order, limit=limit, offset=0,
+        )
+        for row in data.get("journeys", []):
+            yield {k: ("" if v is None else v) for k, v in row.items()}
 
     def get_page_flow_summary(self, db: Session, days: int = 7, limit: int = 100) -> Dict[str, Any]:
         """Summarize page-to-page flows across sessions."""
@@ -2330,9 +2456,29 @@ class AnalyticsService:
         flows = [{"from": row["prev_path"], "to": row["path"], "count": row["count"]} for row in rows]
         return {"flows": flows, "period_days": days}
     
-    def list_unified_users(self, db: Session, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
-        """List unique users by client_id with their activity summary and attribution."""
+    def list_unified_users(
+        self,
+        db: Session,
+        limit: int = 50,
+        offset: int = 0,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        q: Optional[str] = None,
+        converted: bool = False,
+        source: Optional[str] = None,
+        visitor: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """List unique users by client_id with their activity summary and attribution.
+
+        With any filter, lists people active in the date range (30 days when none is given), newest
+        first: q is a client ID (or its start), an email or a name; converted keeps people who
+        submitted a form; source matches any visit's source in the range; visitor is human or bot.
+        """
         try:
+            if any([start_date, end_date, q, converted, source, visitor]):
+                return self._list_users_filtered(
+                    db, limit, offset, start_date, end_date, q, converted, source, visitor,
+                )
             total = db.query(func.count(func.distinct(Visit.client_id))).filter(
                 Visit.client_id.isnot(None)
             ).scalar() or 0
@@ -2346,105 +2492,161 @@ class AnalyticsService:
             ).filter(
                 Visit.client_id.isnot(None)
             ).group_by(Visit.client_id).order_by(desc('last_seen')).offset(offset).limit(limit).all()
-            
-            if not user_stats:
-                return {
-                    "users": [],
-                    "total_count": total,
-                    "has_next": False,
-                    "has_prev": offset > 0,
-                    "current_page": (offset // limit) + 1,
-                    "total_pages": 0
-                }
-
-            client_ids = [u.client_id for u in user_stats]
-
-            first_visit_subq = db.query(
-                Visit.client_id.label("client_id"),
-                func.min(Visit.timestamp).label("first_ts")
-            ).filter(
-                Visit.client_id.in_(client_ids)
-            ).group_by(Visit.client_id).subquery()
-
-            first_visits = db.query(
-                Visit.client_id,
-                Visit.source,
-                Visit.medium,
-                Visit.campaign,
-                Visit.page_url
-            ).join(
-                first_visit_subq,
-                and_(Visit.client_id == first_visit_subq.c.client_id, Visit.timestamp == first_visit_subq.c.first_ts)
-            ).all()
-
-            attribution_data = {}
-            for row in first_visits:
-                if row.client_id not in attribution_data:
-                    attribution_data[row.client_id] = {
-                        "source": row.source or "direct",
-                        "medium": row.medium or "none",
-                        "campaign": row.campaign or "none",
-                        "landing_page": row.page_url
-                    }
-
-            event_counts = dict(
-                db.query(VisitEvent.client_id, func.count(VisitEvent.id))
-                .filter(VisitEvent.client_id.in_(client_ids))
-                .group_by(VisitEvent.client_id).all()
-            )
-
-            conversion_counts = dict(
-                db.query(VisitEvent.client_id, func.count(VisitEvent.id))
-                .filter(VisitEvent.client_id.in_(client_ids), VisitEvent.event_type == 'form_submit')
-                .group_by(VisitEvent.client_id).all()
-            )
-
-            last_session_subq = db.query(
-                VisitSession.client_id.label("client_id"),
-                func.max(VisitSession.last_visit).label("last_ts")
-            ).filter(
-                VisitSession.client_id.in_(client_ids)
-            ).group_by(VisitSession.client_id).subquery()
-
-            last_sessions = db.query(
-                VisitSession.client_id,
-                VisitSession.country,
-                VisitSession.city
-            ).join(
-                last_session_subq,
-                and_(VisitSession.client_id == last_session_subq.c.client_id, VisitSession.last_visit == last_session_subq.c.last_ts)
-            ).all()
-
-            location_map = {row.client_id: {"country": row.country, "city": row.city} for row in last_sessions}
-
-            user_list = []
-            for u in user_stats:
-                attr = attribution_data.get(u.client_id, {})
-                loc = location_map.get(u.client_id, {})
-                user_list.append({
-                    "client_id": u.client_id,
-                    "session_count": u.session_count,
-                    "visit_count": u.visit_count,
-                    "event_count": event_counts.get(u.client_id, 0),
-                    "conversion_count": conversion_counts.get(u.client_id, 0),
-                    "first_seen": u.first_seen.isoformat() if u.first_seen else None,
-                    "last_seen": u.last_seen.isoformat() if u.last_seen else None,
-                    "last_country": loc.get("country"),
-                    "last_city": loc.get("city"),
-                    "attribution": attr,
-                })
-            
-            return {
-                "users": user_list,
-                "total_count": total,
-                "has_next": (offset + limit) < total,
-                "has_prev": offset > 0,
-                "current_page": (offset // limit) + 1,
-                "total_pages": ((total - 1) // limit) + 1 if total > 0 else 0
-            }
+            return self._describe_users(db, user_stats, total, limit, offset)
         except Exception as e:
             logger.error("Error listing unified users", error=str(e))
             return {"users": [], "total_count": 0, "error": str(e)}
+
+    def _list_users_filtered(self, db, limit, offset, start_date, end_date, q, converted, source, visitor):
+        since = start_date or ((end_date or datetime.now(timezone.utc)) - timedelta(days=30))
+        filters = [Visit.client_id.isnot(None), Visit.timestamp >= since]
+        if end_date:
+            filters.append(Visit.timestamp <= end_date)
+        if visitor in ("human", "bot"):
+            filters.append(Visit.is_bot == (visitor == "bot"))
+        if source:
+            filters.append(contains(Visit.source, source))
+        if converted:
+            filters.append(Visit.client_id.in_(select(JourneySummary.client_id).where(JourneySummary.has_captured_data == 1)))
+        if q and q.strip():
+            term = q.strip()
+            # People who gave an email or name in a form, by what they typed
+            named = (
+                select(JourneySummary.client_id)
+                .where(or_(contains(JourneySummary.email, term), contains(JourneySummary.name, term)))
+                .union(select(LeadSummary.client_id).where(or_(contains(LeadSummary.email, term), contains(LeadSummary.name, term))))
+            )
+            id_match = [Visit.client_id == term]
+            if "@" not in term:
+                # The C collation lets a prefix LIKE use the client_id index
+                id_match.append(Visit.client_id.like(term.replace("%", "").replace("_", "\\_") + "%", escape="\\"))
+            filters.append(or_(*id_match, Visit.client_id.in_(named)))
+
+        active = (
+            db.query(Visit.client_id.label("client_id"), func.max(Visit.timestamp).label("last_active"))
+            .filter(*filters).group_by(Visit.client_id)
+        )
+        total = active.count()
+        page = active.order_by(desc("last_active"), Visit.client_id).offset(offset).limit(limit).all()
+        ids = [r.client_id for r in page]
+        stats = {}
+        if ids:
+            stats = {
+                r.client_id: r for r in db.query(
+                    Visit.client_id,
+                    func.count(func.distinct(Visit.session_id)).label('session_count'),
+                    func.count(Visit.id).label('visit_count'),
+                    func.min(Visit.timestamp).label('first_seen'),
+                    func.max(Visit.timestamp).label('last_seen'),
+                ).filter(Visit.client_id.in_(ids)).group_by(Visit.client_id)
+            }
+        return self._describe_users(db, [stats[i] for i in ids if i in stats], total, limit, offset)
+
+    def _describe_users(self, db: Session, user_stats, total: int, limit: int, offset: int) -> Dict[str, Any]:
+        """Adds attribution, events, conversions and location to one page of per-client stats."""
+        if not user_stats:
+            return {
+                "users": [],
+                "total_count": total,
+                "has_next": False,
+                "has_prev": offset > 0,
+                "current_page": (offset // limit) + 1,
+                "total_pages": 0
+            }
+
+        client_ids = [u.client_id for u in user_stats]
+
+        first_visit_subq = db.query(
+            Visit.client_id.label("client_id"),
+            func.min(Visit.timestamp).label("first_ts")
+        ).filter(
+            Visit.client_id.in_(client_ids)
+        ).group_by(Visit.client_id).subquery()
+
+        first_visits = db.query(
+            Visit.client_id,
+            Visit.source,
+            Visit.medium,
+            Visit.campaign,
+            Visit.page_url
+        ).join(
+            first_visit_subq,
+            and_(Visit.client_id == first_visit_subq.c.client_id, Visit.timestamp == first_visit_subq.c.first_ts)
+        ).all()
+
+        attribution_data = {}
+        for row in first_visits:
+            if row.client_id not in attribution_data:
+                attribution_data[row.client_id] = {
+                    "source": row.source or "direct",
+                    "medium": row.medium or "none",
+                    "campaign": row.campaign or "none",
+                    "landing_page": row.page_url
+                }
+
+        event_counts = dict(
+            db.query(VisitEvent.client_id, func.count(VisitEvent.id))
+            .filter(VisitEvent.client_id.in_(client_ids))
+            .group_by(VisitEvent.client_id).all()
+        )
+
+        conversion_counts = dict(
+            db.query(VisitEvent.client_id, func.count(VisitEvent.id))
+            .filter(VisitEvent.client_id.in_(client_ids), VisitEvent.event_type == 'form_submit')
+            .group_by(VisitEvent.client_id).all()
+        )
+
+        last_session_subq = db.query(
+            VisitSession.client_id.label("client_id"),
+            func.max(VisitSession.last_visit).label("last_ts")
+        ).filter(
+            VisitSession.client_id.in_(client_ids)
+        ).group_by(VisitSession.client_id).subquery()
+
+        last_sessions = db.query(
+            VisitSession.client_id,
+            VisitSession.country,
+            VisitSession.city
+        ).join(
+            last_session_subq,
+            and_(VisitSession.client_id == last_session_subq.c.client_id, VisitSession.last_visit == last_session_subq.c.last_ts)
+        ).all()
+
+        location_map = {row.client_id: {"country": row.country, "city": row.city} for row in last_sessions}
+
+        contacts = {
+            row.client_id: row for row in db.query(JourneySummary.client_id, JourneySummary.email, JourneySummary.name)
+            .filter(JourneySummary.client_id.in_(client_ids))
+        }
+
+        user_list = []
+        for u in user_stats:
+            attr = attribution_data.get(u.client_id, {})
+            loc = location_map.get(u.client_id, {})
+            contact = contacts.get(u.client_id)
+            user_list.append({
+                "email": contact.email if contact else None,
+                "name": contact.name if contact else None,
+                "client_id": u.client_id,
+                "session_count": u.session_count,
+                "visit_count": u.visit_count,
+                "event_count": event_counts.get(u.client_id, 0),
+                "conversion_count": conversion_counts.get(u.client_id, 0),
+                "first_seen": u.first_seen.isoformat() if u.first_seen else None,
+                "last_seen": u.last_seen.isoformat() if u.last_seen else None,
+                "last_country": loc.get("country"),
+                "last_city": loc.get("city"),
+                "attribution": attr,
+            })
+        
+        return {
+            "users": user_list,
+            "total_count": total,
+            "has_next": (offset + limit) < total,
+            "has_prev": offset > 0,
+            "current_page": (offset // limit) + 1,
+            "total_pages": ((total - 1) // limit) + 1 if total > 0 else 0
+        }
 
     def analyze_journey_path(
         self,
@@ -2594,9 +2796,14 @@ class AnalyticsService:
             raise e
 
     def get_live_events(self, db: Session, limit: int = 100) -> List[Dict[str, Any]]:
-        """Get the most recent live tracking events (excludes heartbeat noise)."""
+        """Get the most recent live tracking events (excludes heartbeat noise).
+
+        Each event carries its page view's is_bot and crawler_type, so the stream can hide bots.
+        """
         try:
-            events = db.query(VisitEvent).filter(
+            rows = db.query(VisitEvent, Visit.is_bot, Visit.crawler_type).outerjoin(
+                Visit, Visit.id == VisitEvent.visit_id
+            ).filter(
                 VisitEvent.event_type != 'heartbeat'  # Filter out heartbeat noise
             ).order_by(
                 VisitEvent.timestamp.desc()
@@ -2604,6 +2811,8 @@ class AnalyticsService:
             
             return [
                 {
+                    "is_bot": is_bot,
+                    "crawler_type": crawler_type,
                     "id": event.id,
                     "timestamp": event.timestamp.isoformat() if event.timestamp else None,
                     "event_type": event.event_type,
@@ -2619,7 +2828,7 @@ class AnalyticsService:
                     "page_domain": event.page_domain,
                     "referrer_domain": event.referrer_domain,
                 }
-                for event in events
+                for event, is_bot, crawler_type in rows
             ]
         except Exception as e:
             logger.error("Error getting live events", error=str(e))

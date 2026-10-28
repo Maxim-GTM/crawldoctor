@@ -93,16 +93,17 @@ Pushes to `main` build the image in GitHub Actions and deploy it to `gtm-apps-1`
    cp env.example .env
    # Edit .env with your configuration; for local development add HUB_SSO_DISABLED=true
    ```
-   Leave `REACT_APP_API_URL` unset so `npm start` proxies `/api` to the backend on the same origin
-   (the hub sign-in exchange refuses cross-origin requests).
+   Leave `VITE_API_URL` unset so `npm run dev` proxies `/api` to the backend on the same origin
+   (the hub sign-in exchange refuses cross-origin requests). The proxy targets `http://localhost:8000`;
+   set `CRAWLDOCTOR_DEV_BACKEND` to point it elsewhere.
 
 3. **Start services**:
    ```bash
    # Backend
    uvicorn app.main:app --reload
    
-   # Frontend (in another terminal)
-   cd frontend && npm start
+   # Frontend (in another terminal), on http://localhost:5173
+   cd frontend && npm run dev
    ```
 
 ## 📊 Adding Tracking to Your Website
@@ -233,11 +234,12 @@ GEO-CrawlDoctor/
 │   ├── models/            # Database models
 │   ├── services/          # Business logic
 │   └── utils/             # Utilities
-├── frontend/              # React dashboard
-│   ├── src/
-│   │   ├── components/    # React components
-│   │   ├── pages/         # Page components
-│   │   └── utils/         # Frontend utilities
+├── frontend/              # Dashboard: Vite, React, Tailwind v4 and shadcn/ui (Base UI),
+│   ├── src/               #   the same kit and theme as the GTM Hub's other dashboards
+│   │   ├── components/    # App shell, shared parts; ui/ is the shadcn kit
+│   │   ├── pages/         # One file per page
+│   │   ├── lib/           # API client, auth, formatting, navigation
+│   │   └── hooks/         # Date range in the URL, debounce, mobile check
 ├── docker-compose.yml     # Local development
 ├── deploy/compose.yml     # Production compose file (AWS)
 └── Dockerfile            # Production container
