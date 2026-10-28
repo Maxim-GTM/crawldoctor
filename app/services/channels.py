@@ -34,8 +34,13 @@ AI_ASSISTANT_SOURCES = {
 
 # utm_source values our own sites put on cross-links
 INTERNAL_UTM_SOURCES = {"bifrost_docs", "maxim_docs", "maxim_app", "bifrost_app"}
+# CTAs on our pages tag utm_source with the page they sit on: articles_<slug>, bifrost_model-library_…
+_INTERNAL_SOURCE = re.compile(r"^(articles|bifrost|maxim|blog)_")
+# …and utm_medium with where on the page they sit: cta_modal, bifrost_footer, sidebar_widget
+_INTERNAL_MEDIUM = re.compile(r"^cta|^(bifrost|maxim)_|footer|navbar|sidebar|widget")
 
-_PAID_MEDIUM = re.compile(r"cpc|ppc|cpm|cpv|paid|display|retarget|^ads?$|banner|sponsored")
+# aimax: Google Ads' AI Max for Search campaigns
+_PAID_MEDIUM = re.compile(r"cpc|ppc|cpm|cpv|paid|display|retarget|^ads?$|^banner$|sponsored|^aimax$")
 _SEARCH = re.compile(
     r"(^|\.)(google|bing|duckduckgo|yahoo|yandex|baidu|ecosia|naver|seznam|sogou|qwant|startpage|ask|aol)"
     r"(\.[a-z.]+)?$|^search\.brave\.com$|^google$|^bing$|^duckduckgo$|^yahoo$|^yandex$|^baidu$|^ecosia$"
@@ -60,11 +65,13 @@ def classify_channel(source: Optional[str], medium: Optional[str] = None) -> str
     m = (medium or "").strip().lower()
     if s in _DIRECT and m in _DIRECT:
         return DIRECT
+    if m and _INTERNAL_MEDIUM.search(m):
+        return INTERNAL
     if m and _PAID_MEDIUM.search(m):
         return PAID
     if s in _DIRECT:
         return DIRECT
-    if s in INTERNAL_UTM_SOURCES or is_internal_domain(s):
+    if s in INTERNAL_UTM_SOURCES or _INTERNAL_SOURCE.match(s) or is_internal_domain(s):
         return INTERNAL
     if s in AI_ASSISTANT_SOURCES:
         return AI

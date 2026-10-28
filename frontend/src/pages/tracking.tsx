@@ -28,16 +28,21 @@ function StatusBadge({ status, since }: { status: TrackingStatus; since?: string
   )
 }
 
-const FILTERS = { others: "" }
+const FILTERS = { others: "", retired: "" }
+// A host that hasn't sent a page view for this long was moved or retired, not broken
+const RETIRED_MS = 90 * 86_400_000
+const retired = (lastSeen?: string | null) => !lastSeen || Date.now() - new Date(lastSeen).getTime() > RETIRED_MS
 
 export function TrackingPage() {
   const { filters: f, set } = useUrlFilters(FILTERS)
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["tracking-health"], queryFn: analyticsAPI.getTrackingHealth, refetchInterval: 5 * 60_000,
   })
-  const sites = (data?.sites ?? []).filter((s) => s.ours || f.others)
-  const others = (data?.sites ?? []).filter((s) => !s.ours).length
-  const ours = (data?.sites ?? []).filter((s) => s.ours)
+  const all = data?.sites ?? []
+  const sites = all.filter((s) => (s.ours || f.others) && (f.retired || !retired(s.last_seen)))
+  const others = all.filter((s) => !s.ours && (f.retired || !retired(s.last_seen))).length
+  const retiredCount = all.filter((s) => (s.ours || f.others) && retired(s.last_seen)).length
+  const ours = all.filter((s) => s.ours && !retired(s.last_seen))
   const count = (st: TrackingStatus) => ours.filter((s) => s.status === st).length
 
   return (
@@ -61,6 +66,8 @@ export function TrackingPage() {
 
         <div className="flex flex-wrap items-center gap-2">
           <FilterSwitch label={`Show other hosts${others ? ` (${num(others)})` : ""}`} checked={!!f.others} onChange={(v) => set({ others: v ? "1" : "" })} />
+          <FilterSwitch label={`Show hosts silent for 90+ days${retiredCount && !f.retired ? ` (${num(retiredCount)})` : ""}`}
+            checked={!!f.retired} onChange={(v) => set({ retired: v ? "1" : "" })} />
           <span className="ml-auto text-xs text-muted-foreground">
             {data && <>Checked {relativeTime(data.checked_at)}{data.hidden_domains ? ` · ${num(data.hidden_domains)} local, test and IP hosts hidden` : ""}</>}
           </span>

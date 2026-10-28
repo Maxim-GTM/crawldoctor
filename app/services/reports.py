@@ -115,6 +115,29 @@ def company_from_form(captured_data: Optional[str]) -> Optional[str]:
     return None
 
 
+def form_answers_match(captured_data: Optional[str], term: str) -> bool:
+    """True when `term` is in one of the answers a lead typed, not in the form's questions."""
+    if not captured_data:
+        return False
+    t = term.lower()
+    try:
+        values = json.loads(captured_data)
+    except (TypeError, ValueError):
+        return t in captured_data.lower()
+    if not isinstance(values, dict):
+        return t in str(values).lower()
+    return any(t in str(v).lower() for v in values.values() if v is not None)
+
+
+def lead_matches(lead, term: str) -> bool:
+    """A lead summary row matches a search by its email, name, client ID or form answers."""
+    t = term.lower()
+    return (
+        t in (lead.email or "").lower() or t in (lead.name or "").lower()
+        or lead.client_id == term or form_answers_match(lead.captured_data, term)
+    )
+
+
 class ReportsService:
 
     @staticmethod
@@ -449,9 +472,16 @@ class ReportsService:
                 results.append({"kind": kind, "id": id_, "label": label, "detail": detail, **extra})
 
         def leads_matching(*conds):
-            for l in db.query(LeadSummary).filter(or_(*conds)).order_by(LeadSummary.last_seen.desc()).limit(limit):
+            found = 0
+            for l in db.query(LeadSummary).filter(or_(*conds)).order_by(LeadSummary.last_seen.desc()).limit(200):
+                # The SQL match also hits form questions; keep leads whose own details match
+                if not lead_matches(l, q):
+                    continue
                 add("journey", l.client_id, l.name or l.email or l.client_id,
                     " · ".join(x for x in [l.email if l.name else None, l.captured_path, _iso(l.last_seen)] if x))
+                found += 1
+                if found >= limit:
+                    break
 
         if re.match(r"^https?://", q, re.I) or ("/" in q and "." in q.split("/")[0] and " " not in q):
             url = q if re.match(r"^https?://", q, re.I) else f"https://{q}"
