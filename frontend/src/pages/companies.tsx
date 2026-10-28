@@ -42,8 +42,10 @@ export function CompaniesPage() {
             {c && (
               <>
                 <p>
-                  {num(c.enriched_sessions)} of {num(c.human_sessions)} human sessions in this range ({pct(c.enriched_sessions, c.human_sessions)}) have an IP lookup,
-                  and only {num(c.company_sessions)} of those come from an organisation rather than a home ISP, cloud host, VPN or proxy.
+                  {num(c.enriched_sessions)} of {num(c.human_sessions)} human sessions in this range ({pct(c.enriched_sessions, c.human_sessions)}) have an IP lookup.
+                  {c.detailed_sessions < c.enriched_sessions && <> Only {num(c.detailed_sessions)} of those lookups include company details
+                    (the rest have just a name, which can't tell an employer from a home ISP or cloud host).</>}
+                  {" "}{num(c.company_sessions)} come from an organisation rather than a home ISP, cloud host, VPN or proxy.
                   The lookup job is being repaired, so treat this list as a sample, not a full account of who visited.
                 </p>
                 <Progress value={Math.min(100, enriched * 100)} className="h-1.5 max-w-md" aria-label="Sessions with an IP lookup" />

@@ -164,6 +164,8 @@ def client():
     ]:
         db.add(IpEnrichment(ip=ip, company_domain=domain, company_name=domain.split(".")[0].title(), company_type=ctype,
                             status="success", **flags))
+    # A lookup made without an API key: a name, and nothing to tell an ISP from a company
+    db.add(IpEnrichment(ip="4.4.4.4", company_name="Deutsche Telekom", status="success"))
     db.commit()
 
     app = FastAPI()
@@ -325,8 +327,8 @@ def test_companies_skip_isps_and_datacenters(client):
     acme = data["companies"][0]
     assert acme["views"] == 2 and acme["sessions"] == 1
     assert {p["path"] for p in acme["pages"]} == {"/pricing", "/book-a-demo"}
-    # Five human sessions in all time: three enriched, one of them a real company
-    assert data["coverage"] == {"human_sessions": 4, "enriched_sessions": 3, "company_sessions": 1}
+    # Four human sessions in all time, all looked up; one lookup is a bare name; one is a real company
+    assert data["coverage"] == {"human_sessions": 4, "enriched_sessions": 4, "detailed_sessions": 3, "company_sessions": 1}
 
 
 def test_tracking_health(client):

@@ -227,7 +227,7 @@ export type Company = {
   pages: { domain: string; path: string; views: number }[]
 }
 export type Companies = {
-  coverage: { human_sessions: number; enriched_sessions: number; company_sessions: number }
+  coverage: { human_sessions: number; enriched_sessions: number; detailed_sessions: number; company_sessions: number }
   companies: Company[]
 }
 

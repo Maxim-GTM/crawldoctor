@@ -320,10 +320,15 @@ class ReportsService:
         human = _in_range(Visit.timestamp, since, until) + [Visit.is_bot == False]  # noqa: E712
         company = self._company_ip()
 
+        # Lookups made without an API key return only a name: no domain, type or network flags,
+        # so they can't be told apart from ISPs and hosts and are counted separately
+        detailed = and_(IpEnrichment.status == "success",
+                        or_(IpEnrichment.company_domain.isnot(None), IpEnrichment.company_type.isnot(None)))
         cov = (
             db.query(
                 func.count(func.distinct(Visit.session_id)),
                 func.count(func.distinct(case((IpEnrichment.status == "success", Visit.session_id)))),
+                func.count(func.distinct(case((detailed, Visit.session_id)))),
                 func.count(func.distinct(case((company, Visit.session_id)))),
             )
             .outerjoin(IpEnrichment, IpEnrichment.ip == Visit.ip_address)
@@ -357,7 +362,10 @@ class ReportsService:
                 if len(lst) < 8:
                     lst.append({"domain": p.page_domain, "path": p.path, "views": p.views})
         return {
-            "coverage": {"human_sessions": cov[0] or 0, "enriched_sessions": cov[1] or 0, "company_sessions": cov[2] or 0},
+            "coverage": {
+                "human_sessions": cov[0] or 0, "enriched_sessions": cov[1] or 0,
+                "detailed_sessions": cov[2] or 0, "company_sessions": cov[3] or 0,
+            },
             "companies": [{
                 "domain": r.domain, "name": r.name, "type": r.type, "country": r.country, "views": r.views,
                 "sessions": r.sessions, "visitors": r.visitors, "last_seen": _iso(r.last_seen), "pages": pages.get(r.domain, []),

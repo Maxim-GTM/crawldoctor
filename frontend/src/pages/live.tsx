@@ -24,7 +24,7 @@ const POLL_MS = 3000
 /** One colour per common event type so the stream scans at a glance. */
 const EVENT_COLORS: Record<string, string> = {
   page_view: "var(--series-1)", click: "var(--series-3)", form_submit: "var(--good)", form_input: "var(--series-4)",
-  scroll: "var(--series-gray)", navigation: "var(--series-7)", visibility: "var(--series-2)", heartbeat: "var(--series-5)",
+  scroll: "var(--series-gray)", navigation: "var(--series-7)", navigate: "var(--series-7)", visibility: "var(--series-2)", heartbeat: "var(--series-5)",
 }
 
 function EventBadge({ type }: { type: string }) {
