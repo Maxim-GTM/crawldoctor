@@ -471,22 +471,23 @@
       if (document.visibilityState === 'visible') sendEvent('heartbeat', getEngagement());
     }, 30000);
 
+    // ---- navigation: kind 'unload' when the page is left, 'spa' for in-page route changes ----
     window.addEventListener('beforeunload', function () {
       try {
         var nav = performance && performance.getEntriesByType ? performance.getEntriesByType('navigation')[0] : null;
         var data = getEngagement();
+        data.kind = 'unload';
         data.type = (nav && nav.type) || 'unknown';
-        sendEvent('navigate', data);
+        sendEvent('navigation', data);
       } catch (_) {}
     });
 
-    // ---- SPA navigation tracking ----
     var _lastHref = location.href;
     function onNavChange(type) {
       try {
         var href = location.href;
         if (href !== _lastHref) {
-          sendEvent('navigation', { type: type, from: _lastHref, to: href, tracking_method: 'javascript' });
+          sendEvent('navigation', { kind: 'spa', type: type, from: _lastHref, to: href, tracking_method: 'javascript' });
           _lastHref = href;
           resetScrollMilestones();
           setTimeout(checkScrollDepthMilestone, 0);

@@ -178,6 +178,15 @@ class Settings(BaseSettings):
     )
     ip_enrichment_interval_minutes: int = Field(default=60, description="Incremental enrichment job interval (minutes)")
 
+    # Tracking ingestion
+    tracking_allowed_domains: list[str] = Field(
+        default=["getmaxim.ai", "getbifrost.ai", "maxim-articles.ghost.io"],
+        description=(
+            "Only record events from pages on these hosts or their subdomains, on the default port. "
+            "An empty list accepts every page"
+        ),
+    )
+
     class Config:
         env_file = ".env"
         env_prefix = "CRAWLDOCTOR_"
