@@ -13,7 +13,7 @@ from app.models.visit import Visit, VisitSession, VisitEvent
 from app.models.funnel import FunnelConfig
 from app.models.summary import LeadSummary, JourneySummary, JourneyFormFill
 from app.config import settings
-from app.services.reports import company_from_form, contains
+from app.services.reports import company_from_form, contains, lead_matches
 
 logger = structlog.get_logger()
 
@@ -2252,8 +2252,8 @@ class AnalyticsService:
             if start_date: query = query.filter(LeadSummary.last_seen >= start_date)
             if end_date: query = query.filter(LeadSummary.last_seen <= end_date)
             if captured_path: query = query.filter(LeadSummary.captured_path.ilike(f"{captured_path}%"))
-            if q and q.strip():
-                term = q.strip()
+            term = (q or "").strip()
+            if term:
                 query = query.filter(or_(
                     contains(LeadSummary.email, term), contains(LeadSummary.name, term),
                     contains(LeadSummary.captured_data, term), LeadSummary.client_id == term,
@@ -2262,8 +2262,16 @@ class AnalyticsService:
             if medium: query = query.filter(func.lower(LeadSummary.medium) == medium.lower())
             if campaign: query = query.filter(func.lower(LeadSummary.campaign) == campaign.lower())
             
-            total = query.count()
-            rows = query.order_by(LeadSummary.last_seen.desc()).offset(offset).limit(limit).all()
+            query = query.order_by(LeadSummary.last_seen.desc())
+            if term:
+                # captured_data also holds the form's questions ("Are you using an LLM Gateway today?"),
+                # so the SQL match over-selects; keep leads whose own answers match. A range holds
+                # a few hundred leads at most, so this pages in Python.
+                matches = [r for r in query.all() if lead_matches(r, term)]
+                total, rows = len(matches), matches[offset:offset + limit]
+            else:
+                total = query.count()
+                rows = query.offset(offset).limit(limit).all()
             
             leads = []
             for r in rows:

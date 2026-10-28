@@ -41,9 +41,16 @@ jobs:
       - name: Smoke test nginx as the image user
         run: |
           docker run --rm --entrypoint sh crawldoctor:ci -c '
-            nginx -t && nginx &&
-            sleep 1 &&
-            curl -sf -o /dev/null http://127.0.0.1:8000/ &&
+            set -e
+            nginx -t && nginx
+            sleep 1
+            curl -sf -o /dev/null http://127.0.0.1:8000/
+            # A deploy must show up at once: the page is re-checked on every load, hashed build
+            # files are cached for good, and a chunk from an older build is a 404, not the page.
+            curl -sfI http://127.0.0.1:8000/dashboard | grep -qi "^cache-control: no-cache"
+            asset=$(ls /app/frontend/assets | head -n 1)
+            curl -sfI "http://127.0.0.1:8000/assets/$asset" | grep -qi "^cache-control: public, max-age=31536000, immutable"
+            test "$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/assets/missing-chunk.js)" = 404
             echo "nginx ok as $(id -un)"'
       # The dependency upgrades (FastAPI/Starlette 1.x, PyJWT) must at least import and route.
       - name: Smoke test the Python app imports

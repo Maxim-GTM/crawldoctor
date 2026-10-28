@@ -56,6 +56,18 @@ WEEK_AGO = (NOW - timedelta(days=7)).strftime("%Y-%m-%d")
     ("reddit post", None, "Social"),
     ("github.com", None, "Referral"),
     ("newsletter", "email", "Referral"),
+    # Tags our own CTAs use, as seen in production
+    ("google", "aimax", "Paid"),
+    ("chatgpt", "ads", "Paid"),
+    ("", "bifrost_footer", "Internal"),
+    ("www.google.com", "bifrost_footer", "Internal"),
+    ("bifrost_docs", "bifrost_navbar", "Internal"),
+    ("articles_failover-routing-strategies", "cta_modal", "Internal"),
+    ("articles", "cta_banner_prompt_engineering", "Internal"),
+    ("bifrost_model-library_compare_openai_gpt-5", "cta_modal", "Internal"),
+    ("blog", "sidebar_widget", "Internal"),
+    ("content", "social", "Social"),
+    ("aiagenttools", "directory", "Referral"),
 ])
 def test_classify_channel(source, medium, channel):
     assert classify_channel(source, medium) == channel
@@ -147,7 +159,7 @@ def client():
                        captured_data=json.dumps({"Email": "alice@acme.dev", "Company": "Acme Robotics"})))
     db.add(LeadSummary(client_id="cid-bob", email="bob@globex.io", name="Bob", captured_path="/enterprise",
                        captured_at=_ts(days=2), last_seen=_ts(days=2), source="chatgpt.com",
-                       captured_data=json.dumps({"email": "bob@globex.io"})))
+                       captured_data=json.dumps({"email": "bob@globex.io", "Are you using an LLM Gateway today?": "No"})))
     db.add(LeadSummary(client_id="cid-dan", email="dan@initech.com", name="Dan", captured_path="/book-a-demo",
                        captured_at=_ts(days=1), last_seen=_ts(days=1), source=None, captured_data="{}"))
     db.add(JourneySummary(client_id="cid-alice", email="alice@acme.dev", name="Alice Example", has_captured_data=1,
@@ -252,6 +264,14 @@ def test_lead_search_and_company(client):
     assert ids(get(client, "/leads", q="dan", **rng)["leads"], "client_id") == ["cid-dan"]
     lead = get(client, "/leads", q="alice", **rng)["leads"][0]
     assert lead["company"] == "Acme Robotics"
+    # Words in the form's questions don't match; the answers do
+    assert get(client, "/leads", q="gateway", **rng)["leads"] == []
+    assert get(client, "/leads", q="gateway", **rng)["total_count"] == 0
+    assert ids(get(client, "/leads", q="robot", limit=1, **rng)["leads"], "client_id") == ["cid-alice"]
+
+
+def test_search_ignores_form_questions(client):
+    assert get(client, "/search", q="gateway")["results"] == []
 
 
 def test_lead_path_facet(client):
