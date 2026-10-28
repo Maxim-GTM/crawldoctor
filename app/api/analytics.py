@@ -9,11 +9,13 @@ import csv
 import io
 import json
 import asyncio
+import re
 from pydantic import BaseModel, Field
 
 from app.database import get_db, SessionLocal
 from app.config import settings
 from app.services.analytics import AnalyticsService
+from app.services.reports import ReportsService
 from app.utils.auth import get_current_user, verify_export_api_key
 from app.models.user import User
 
@@ -21,6 +23,17 @@ logger = structlog.get_logger()
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 analytics_service = AnalyticsService()
+reports_service = ReportsService()
+
+
+def _day_range(start_date: Optional[str], end_date: Optional[str]):
+    """YYYY-MM-DD query params as UTC datetimes covering whole days (None when not given)."""
+    try:
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc) if start_date else None
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59, tzinfo=timezone.utc) if end_date else None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Dates must be YYYY-MM-DD")
+    return start_dt, end_dt
 
 
 @router.get("/summary")
@@ -235,6 +248,11 @@ async def get_recent_activity(
     offset: int = Query(0, ge=0, description="Number of visits to skip"),
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    visitor: Optional[str] = Query(None, max_length=100, description="human, bot, or one crawler_type (e.g. GoogleBot)"),
+    path: Optional[str] = Query(None, max_length=500, description="Page path contains"),
+    source: Optional[str] = Query(None, max_length=100, description="Source (utm_source or referrer host) contains"),
+    country: Optional[str] = Query(None, min_length=2, max_length=2, description="Two-letter country code"),
+    domain: Optional[str] = Query(None, max_length=200, description="Exact page domain"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -242,7 +260,10 @@ async def get_recent_activity(
     try:
         start_dt = datetime.strptime(start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc) if start_date else None
         end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59, tzinfo=timezone.utc) if end_date else None
-        return analytics_service.get_recent_activity(db, limit=limit, offset=offset, start_date=start_dt, end_date=end_dt)
+        return analytics_service.get_recent_activity(
+            db, limit=limit, offset=offset, start_date=start_dt, end_date=end_dt,
+            visitor=visitor, path=path, source=source, country=country, domain=domain,
+        )
     except Exception as e:
         logger.error("Failed to get recent activity", error=str(e))
         raise HTTPException(status_code=500, detail="Failed to get recent activity")
@@ -252,12 +273,22 @@ async def get_recent_activity(
 async def list_sessions(
     limit: int = Query(50, ge=1, le=200, description="Number of sessions to return"),
     offset: int = Query(0, ge=0, description="Number of sessions to skip"),
+    start_date: Optional[str] = Query(None, description="Last active on or after (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="Last active on or before (YYYY-MM-DD)"),
+    visitor: Optional[str] = Query(None, pattern="^(human|bot)$", description="human or bot"),
+    country: Optional[str] = Query(None, min_length=2, max_length=2, description="Two-letter country code"),
+    referrer: Optional[str] = Query(None, max_length=200, description="Entry referrer domain contains, or 'direct'"),
+    has_client_id: Optional[bool] = Query(None, description="Only sessions with (true) or without (false) a client ID"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """List sessions with summary information."""
+    start_dt, end_dt = _day_range(start_date, end_date)
     try:
-        return analytics_service.list_sessions(db, limit=limit, offset=offset)
+        return analytics_service.list_sessions(
+            db, limit=limit, offset=offset, start_date=start_dt, end_date=end_dt,
+            visitor=visitor, country=country, referrer=referrer, has_client_id=has_client_id,
+        )
     except Exception as e:
         logger.error("Failed to list sessions", error=str(e))
         raise HTTPException(status_code=500, detail="Failed to list sessions")
@@ -304,12 +335,22 @@ async def get_visitor_categories(
 async def list_unified_users(
     limit: int = Query(50, ge=1, le=200, description="Number of users to return"),
     offset: int = Query(0, ge=0, description="Number of users to skip"),
+    start_date: Optional[str] = Query(None, description="Active on or after (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="Active on or before (YYYY-MM-DD)"),
+    q: Optional[str] = Query(None, max_length=255, description="Client ID (or its start), email or name"),
+    converted: bool = Query(False, description="Only people who submitted a form"),
+    source: Optional[str] = Query(None, max_length=100, description="Any visit's source in the range contains"),
+    visitor: Optional[str] = Query(None, pattern="^(human|bot)$", description="human or bot"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """List unique users by client_id with their activity summary."""
+    start_dt, end_dt = _day_range(start_date, end_date)
     try:
-        return analytics_service.list_unified_users(db, limit=limit, offset=offset)
+        return analytics_service.list_unified_users(
+            db, limit=limit, offset=offset, start_date=start_dt, end_date=end_dt,
+            q=q, converted=converted, source=source, visitor=visitor,
+        )
     except Exception as e:
         logger.error("Failed to list unified users", error=str(e))
         raise HTTPException(status_code=500, detail="Failed to list unified users")
@@ -342,6 +383,10 @@ async def list_journeys(
     end_date: Optional[str] = Query(None, description="End date for date range filter (YYYY-MM-DD)"),
     limit: int = Query(50, ge=1, le=200, description="Number of journeys to return"),
     offset: int = Query(0, ge=0, description="Number of journeys to skip"),
+    source: Optional[str] = Query(None, max_length=100, description="First-touch source (case-insensitive; 'direct' for none)"),
+    campaign: Optional[str] = Query(None, max_length=100, description="First-touch campaign (case-insensitive; 'none' for none)"),
+    sort: Optional[str] = Query(None, pattern="^(last_seen|first_seen|visit_count|form_fill_count)$", description="Sort column"),
+    order: Optional[str] = Query(None, pattern="^(asc|desc)$", description="Sort direction (default desc)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -359,6 +404,10 @@ async def list_journeys(
             end_date=end_dt,
             limit=limit,
             offset=offset,
+            source=source,
+            campaign=campaign,
+            sort=sort,
+            order=order,
         )
     except Exception as e:
         logger.error("Failed to list journeys", error=str(e))
@@ -372,6 +421,10 @@ async def export_journeys_csv(
     with_captured_only: bool = Query(False, description="Only include journeys with captured data"),
     start_date: Optional[str] = Query(None, description="Start date for date range filter (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date for date range filter (YYYY-MM-DD)"),
+    source: Optional[str] = Query(None, max_length=100, description="First-touch source (case-insensitive; 'direct' for none)"),
+    campaign: Optional[str] = Query(None, max_length=100, description="First-touch campaign (case-insensitive; 'none' for none)"),
+    sort: Optional[str] = Query(None, pattern="^(last_seen|first_seen|visit_count|form_fill_count)$", description="Sort column"),
+    order: Optional[str] = Query(None, pattern="^(asc|desc)$", description="Sort direction (default desc)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -391,6 +444,10 @@ async def export_journeys_csv(
                     with_captured_only=with_captured_only,
                     start_date=start_dt,
                     end_date=end_dt,
+                    source=source,
+                    campaign=campaign,
+                    sort=sort,
+                    order=order,
                 ):
                     if first_row:
                         fieldnames = row.keys()
@@ -425,6 +482,7 @@ async def export_journeys_csv(
 @router.get("/leads")
 async def list_leads(
     captured_path: Optional[str] = Query(None, description="Filter by captured form path (e.g., /demo)"),
+    q: Optional[str] = Query(None, max_length=255, description="Name, email or form text (e.g. company) contains"),
     source: Optional[str] = Query(None, description="Filter by UTM source"),
     medium: Optional[str] = Query(None, description="Filter by UTM medium"),
     campaign: Optional[str] = Query(None, description="Filter by UTM campaign"),
@@ -443,6 +501,7 @@ async def list_leads(
             start_dt = datetime.now(timezone.utc) - timedelta(days=30)
         return analytics_service.list_leads(
             db,
+            q=q,
             captured_path=captured_path,
             source=source,
             medium=medium,
@@ -461,6 +520,7 @@ async def list_leads(
 @router.get("/leads/export.csv")
 async def export_leads_csv(
     captured_path: Optional[str] = Query(None, description="Filter by captured form path (e.g., /demo)"),
+    q: Optional[str] = Query(None, max_length=255, description="Name, email or form text (e.g. company) contains"),
     source: Optional[str] = Query(None, description="Filter by UTM source"),
     medium: Optional[str] = Query(None, description="Filter by UTM medium"),
     campaign: Optional[str] = Query(None, description="Filter by UTM campaign"),
@@ -481,6 +541,7 @@ async def export_leads_csv(
             try:
                 for row in analytics_service.export_leads(
                     db,
+                    q=q,
                     captured_path=captured_path,
                     source=source,
                     medium=medium,
@@ -583,6 +644,140 @@ async def get_page_flows(
     except Exception as e:
         logger.error("Failed to get page flows", error=str(e))
         raise HTTPException(status_code=500, detail="Failed to get page flows")
+
+
+FACET_FIELDS = "|".join(re.escape(f) for f in ReportsService.FACETS)
+
+
+@router.get("/facets")
+async def get_facet(
+    field: str = Query(..., pattern=f"^({FACET_FIELDS})$", description="dataset.column, e.g. visits.source or leads.captured_path"),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD); defaults to 30 days ago"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    humans_only: bool = Query(False, description="visits.* only: leave out bots"),
+    limit: int = Query(25, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The most common values of a column in the range, for filter suggestions."""
+    start_dt, end_dt = _day_range(start_date, end_date)
+    try:
+        return reports_service.facet(db, field, start_dt, end_dt, humans_only=humans_only, limit=limit)
+    except Exception as e:
+        logger.error("Failed to get facet", field=field, error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to get filter values")
+
+
+@router.get("/timeseries")
+async def get_timeseries(
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD); defaults to 30 days ago"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Page views per UTC day and crawler label ("Human" for people)."""
+    start_dt, end_dt = _day_range(start_date, end_date)
+    try:
+        return reports_service.timeseries(db, start_dt, end_dt)
+    except Exception as e:
+        logger.error("Failed to get timeseries", error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to get daily trend")
+
+
+@router.get("/top-pages")
+async def get_top_pages(
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD); defaults to 30 days ago"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    humans_only: bool = Query(True, description="Leave out bots and crawlers"),
+    domain: Optional[str] = Query(None, max_length=200, description="Exact page domain"),
+    path: Optional[str] = Query(None, max_length=500, description="Path contains"),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Page views and unique visitors per page (domain + path)."""
+    start_dt, end_dt = _day_range(start_date, end_date)
+    try:
+        return reports_service.top_pages(db, start_dt, end_dt, humans_only=humans_only, domain=domain, path=path, limit=limit)
+    except Exception as e:
+        logger.error("Failed to get top pages", error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to get top pages")
+
+
+@router.get("/channels")
+async def get_channels(
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD); defaults to 30 days ago"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Human traffic and leads grouped into Search, AI assistants, Social, Referral, Paid, Direct and Internal."""
+    start_dt, end_dt = _day_range(start_date, end_date)
+    try:
+        return reports_service.channels(db, start_dt, end_dt)
+    except Exception as e:
+        logger.error("Failed to get channels", error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to get channels")
+
+
+@router.get("/ai-referrals")
+async def get_ai_referrals(
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD); defaults to 30 days ago"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Visits, landing pages and leads referred by AI assistants (ChatGPT, Perplexity, Claude, Gemini, Copilot…)."""
+    start_dt, end_dt = _day_range(start_date, end_date)
+    try:
+        return reports_service.ai_referrals(db, start_dt, end_dt)
+    except Exception as e:
+        logger.error("Failed to get AI referrals", error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to get AI referrals")
+
+
+@router.get("/companies")
+async def get_companies(
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD); defaults to 30 days ago"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Companies behind human visits (IP enrichment, without ISPs, hosts, VPNs and proxies), with coverage."""
+    start_dt, end_dt = _day_range(start_date, end_date)
+    try:
+        return reports_service.companies(db, start_dt, end_dt, limit=limit)
+    except Exception as e:
+        logger.error("Failed to get companies", error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to get companies")
+
+
+@router.get("/tracking-health")
+async def get_tracking_health(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Last page view per tracked site and tracking ID, with live / quiet / stale status."""
+    try:
+        return reports_service.tracking_health(db)
+    except Exception as e:
+        logger.error("Failed to get tracking health", error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to get tracking health")
+
+
+@router.get("/search")
+async def search(
+    q: str = Query(..., min_length=1, max_length=2000, description="Email, name, client ID, session ID or URL"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Find the visitor, session or page a pasted value points at."""
+    try:
+        return reports_service.search(db, q)
+    except Exception as e:
+        logger.error("Search failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Search failed")
 
 
 @router.get("/export/csv")
