@@ -85,6 +85,11 @@ class Settings(BaseSettings):
         validation_alias="HUB_URL",
         description="GTM Hub base URL",
     )
+    hub_internal_url: str = Field(
+        default="",
+        validation_alias="HUB_INTERNAL_URL",
+        description="GTM Hub base URL for the server-side sign-in check only; empty means hub_url",
+    )
     app_public_url: str = Field(
         default="https://crawldoctor.agitracker.io",
         validation_alias="APP_PUBLIC_URL",

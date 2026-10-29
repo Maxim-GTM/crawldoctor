@@ -39,6 +39,11 @@ def hub_url() -> str:
     return settings.hub_url.rstrip("/")
 
 
+def hub_internal_url() -> str:
+    """Where verify() calls the hub (HUB_INTERNAL_URL, else HUB_URL). Browsers always get hub_url()."""
+    return (settings.hub_internal_url.strip() or settings.hub_url).rstrip("/")
+
+
 def login_url(path: str = "/") -> str:
     """Hub login URL that sends the browser back to `path` on this app afterwards."""
     # Only same-app paths: "//host" or "/\host" would point browsers at another site.
@@ -92,7 +97,7 @@ async def verify(raw_cookie_header: str) -> HubSession:
     try:
         async with httpx.AsyncClient(timeout=VERIFY_TIMEOUT_SECONDS, follow_redirects=False) as client:
             response = await client.get(
-                f"{hub_url()}/api/sso/verify",
+                f"{hub_internal_url()}/api/sso/verify",
                 params={"app": settings.hub_app_slug},
                 headers={"Cookie": cookies, "Accept": "application/json"},
             )

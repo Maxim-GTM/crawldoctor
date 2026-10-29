@@ -170,12 +170,13 @@ only when CrawlDoctor is opened on its own; inside the hub, the hub's sidebar ha
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `HUB_URL` | `https://hub.agitracker.io` | GTM Hub base URL |
+| `HUB_INTERNAL_URL` | `HUB_URL` | Base URL for the server-side sign-in check only. On gtm-apps-1: `http://hub:3000`, the hub's container on the shared `gtm` network, so the check doesn't go out through Cloudflare |
 | `APP_PUBLIC_URL` | `https://crawldoctor.agitracker.io` | Where the hub sends people back after sign-in |
 | `HUB_APP_SLUG` | `crawldoctor` | This app's slug in the hub |
 | `HUB_SSO_DISABLED` | `false` | Local development only: skip the hub; everyone is `dev@localhost` (admin) |
 | `CRAWLDOCTOR_ALLOW_PASSWORD_LOGIN` | `false` | Break-glass: re-enable `POST /api/v1/auth/login` and `PUT /api/v1/auth/password` |
 
-The first four have no `CRAWLDOCTOR_` prefix. No variables were removed: `CRAWLDOCTOR_ADMIN_*` still
+The first five have no `CRAWLDOCTOR_` prefix. No variables were removed: `CRAWLDOCTOR_ADMIN_*` still
 bootstrap the local `admin` account, which can only sign in while `CRAWLDOCTOR_ALLOW_PASSWORD_LOGIN=true`
 (set a strong `CRAWLDOCTOR_ADMIN_PASSWORD` before turning it on). Unchanged: the public `/track/*`
 endpoints and their CORS, `/health`, `/test/*`, export API keys (`X-Export-API-Key`) and per-user API
