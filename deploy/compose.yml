@@ -26,19 +26,20 @@ services:
       # the password later, use rabbitmqctl change_password inside the container.
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:?}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?}
-      # Erlang's schedulers busy-wait by default, which kept an idle broker at about 9% of a core
-      # on gtm-apps-1 (a quarter of the host's CPU). Without busy-waiting a message waits a few
-      # microseconds longer, which the tracking queue doesn't notice.
-      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "+sbwt none +sbwtdcpu none +sbwtdio none"
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
     restart: unless-stopped
     mem_limit: 512m
+    # Each check starts a CLI Erlang VM in this container: about 1.5 s of CPU. Every 15 s that was
+    # 97% of the broker's CPU (about 10% of a core, Oct 2026), so after startup it runs every
+    # 5 minutes. While starting it checks every 5 s, so crawldoctor (depends_on: service_healthy)
+    # and deploy-app don't wait longer. Nothing acts on the health status after that.
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 15s
+      interval: 5m
       timeout: 10s
-      start_period: 30s
+      start_period: 60s
+      start_interval: 5s
       retries: 5
     networks: [internal]
 
