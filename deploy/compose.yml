@@ -8,8 +8,9 @@ services:
     image: ${IMAGE:?IMAGE is set by deploy-app}
     env_file: .env
     restart: unless-stopped
-    # Public tracking traffic from getmaxim.ai and getbifrost.ai lands here.
-    mem_limit: 2g
+    # Public tracking traffic from getmaxim.ai and getbifrost.ai lands here. It used at most
+    # about 270 MiB (Oct 2026), so 1g still leaves room for a traffic spike.
+    mem_limit: 1g
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -25,6 +26,10 @@ services:
       # the password later, use rabbitmqctl change_password inside the container.
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:?}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?}
+      # Erlang's schedulers busy-wait by default, which kept an idle broker at about 9% of a core
+      # on gtm-apps-1 (a quarter of the host's CPU). Without busy-waiting a message waits a few
+      # microseconds longer, which the tracking queue doesn't notice.
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "+sbwt none +sbwtdcpu none +sbwtdio none"
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
     restart: unless-stopped
