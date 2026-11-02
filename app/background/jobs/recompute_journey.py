@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
@@ -45,6 +45,13 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 # First key of the two-key advisory lock taken per client_id, apart from other advisory locks.
 _RECOMPUTE_LOCK_NS = 0x4C454144  # "LEAD"
+
+# tracking_method of form fills copied from maxdar's records of the sites' forms
+# (sync_maxdar_leads). The tracker's are "javascript".
+SERVER_TRACKING_METHOD = "server"
+
+# A copied fill this close to a tracker fill with the same email is the same submission.
+SAME_SUBMISSION_WINDOW = timedelta(minutes=30)
 
 
 def _fit(value: Any, max_len: int) -> Optional[str]:
@@ -108,6 +115,42 @@ def _pick_best_profile(real_events: List) -> tuple:
             break
 
     return (work_email or any_email, work_name or any_name)
+
+
+def form_email(form_vals: Optional[Dict]) -> Optional[str]:
+    """The email in a form_values dict, lowercased, or None."""
+    email, _ = _extract_profile_from_values(form_vals)
+    return email.lower() if email else None
+
+
+def _event_email(ev) -> Optional[str]:
+    ed = ev.event_data or {}
+    return form_email(ed.get("form_values") or ed.get("values"))
+
+
+def _is_server_fill(ev) -> bool:
+    return (ev.event_data or {}).get("tracking_method") == SERVER_TRACKING_METHOD
+
+
+def _utc(ts: datetime) -> datetime:
+    return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+
+
+def _drop_tracked_duplicates(events: List) -> List:
+    """Drop copied form fills (sync_maxdar_leads) that the tracker recorded too.
+
+    The sync skips submissions the tracker already has, but the tracker's copy can arrive after
+    the sync joined a known lead. The tracker's copy is kept: it belongs to the visitor's session.
+    """
+    tracked = [(_event_email(ev), _utc(ev.timestamp)) for ev in events if not _is_server_fill(ev)]
+    kept = []
+    for ev in events:
+        if _is_server_fill(ev):
+            email, ts = _event_email(ev), _utc(ev.timestamp)
+            if email and any(e == email and abs(t - ts) <= SAME_SUBMISSION_WINDOW for e, t in tracked):
+                continue
+        kept.append(ev)
+    return kept
 
 
 def _extract_domain(url: str) -> Optional[str]:
@@ -194,7 +237,9 @@ class RecomputeJourney:
             .order_by(VisitEvent.timestamp.asc())
             .all()
         )
-        real_events = [e for e in form_events if is_real_form_submit(e.event_data)]
+        real_events = _drop_tracked_duplicates(
+            [e for e in form_events if is_real_form_submit(e.event_data)]
+        )
 
         if not visits and not real_events:
             # Nothing to summarize — clean up any stale rows
