@@ -191,6 +191,13 @@ class Settings(BaseSettings):
             "An empty list accepts every page"
         ),
     )
+    maxdar_database_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "Read-only Postgres URL of maxdar, where every demo and enterprise form submission "
+            "lands. sync_maxdar_leads copies the ones the tracker missed. Unset turns it off"
+        ),
+    )
 
     class Config:
         env_file = ".env"

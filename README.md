@@ -114,6 +114,30 @@ Pushes to `main` build the image in GitHub Actions and deploy it to `gtm-apps-1`
 <script src="https://your-domain.com/track/js?tid=your-tracking-id"></script>
 ```
 
+### Leads the tracker missed (from maxdar)
+
+The tracker loads through Google Tag Manager, which ad and privacy blockers stop: their browsers send
+CrawlDoctor nothing, not even a page view. Between 2026-10-12 and 2026-11-02 it recorded 68 of the
+121 demo and enterprise requests. A test submission from a browser without a blocker on 2026-11-02
+was recorded within a second, so the gap is the blockers, not the pipeline.
+
+maxdar (the GTM team's Neon project) receives every submission of those forms. With
+`CRAWLDOCTOR_MAXDAR_DATABASE_URL` set (a read-only connection string to maxdar), the background job
+`sync_maxdar_leads` reads its `events` table every 5 minutes:
+
+- Only "Bifrost Demos" (form page `/book-a-demo`) and "Enterprise License Requests" (`/enterprise`)
+  that maxdar doesn't mark as junk are read.
+- A submission the tracker recorded (a form fill with the same email within 30 minutes) is left
+  alone.
+- Any other is stored as a `form_submit` with `tracking_method: "server"` at maxdar's `created_at`.
+  It goes on the visitor of an existing lead with that email, or on a new visitor made from the
+  email (`lead-…`, so a blocked person's later requests join the same lead). It then becomes a lead
+  like any other.
+- Copied leads have no pages, visits or source, since the visitor was never tracked. Their
+  "Captured on" is the form's usual page.
+- The first run reads back `CRAWLDOCTOR_SUMMARY_BACKFILL_DAYS` (30), so last month's missed leads
+  appear too. Each maxdar row is copied once, keyed by its id.
+
 ## 🤖 Detected AI Crawlers
 
 CrawlDoctor automatically detects and classifies these AI crawlers:
