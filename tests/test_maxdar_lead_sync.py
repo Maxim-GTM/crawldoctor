@@ -7,6 +7,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
 
+from app.background.models import BackgroundJobState
 from app.background.jobs import sync_maxdar_leads as sync_mod
 from app.background.jobs.recompute_journey import RecomputeJourney
 from app.background.jobs.sync_maxdar_leads import SyncMaxdarLeads
@@ -31,7 +32,7 @@ def _jsonb_as_json(type_, compiler, **kw):
 @pytest.fixture
 def db():
     engine = create_engine("sqlite://")
-    for model in (VisitSession, Visit, VisitEvent, JourneySummary, JourneyFormFill, LeadSummary):
+    for model in (VisitSession, Visit, VisitEvent, JourneySummary, JourneyFormFill, LeadSummary, BackgroundJobState):
         model.__table__.create(engine)
     session = sessionmaker(bind=engine)()
     yield session
@@ -148,21 +149,53 @@ def test_row_without_an_email_is_skipped(db, maxdar):
     assert db.query(VisitEvent).count() == 0
 
 
-def test_sweep_reads_back_past_its_watermark_and_waits_for_the_tracker(db, maxdar):
-    since = datetime(2026, 11, 2, 8, 0, tzinfo=timezone.utc)
-    SyncMaxdarLeads().sweep(db, since=since)
+def _utc(ts):
+    return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts
+
+
+def test_first_read_goes_back_the_backfill_window(db, maxdar):
+    SyncMaxdarLeads().sweep(db, since=datetime.now(timezone.utc) - timedelta(minutes=5))
 
     [(read_from, read_until)] = maxdar["calls"]
-    assert read_from == since - timedelta(minutes=15)
-    assert datetime.now(timezone.utc) - read_until >= timedelta(minutes=2)
+    now = datetime.now(timezone.utc)
+    assert now - read_from >= timedelta(days=sync_mod.settings.summary_backfill_days)
+    assert now - read_until >= timedelta(minutes=2)  # the tracker's own copy may still be on its way
 
 
-def test_sync_is_off_without_a_maxdar_url(db, maxdar, monkeypatch):
+def test_next_read_starts_before_where_the_last_one_ended(db, maxdar):
+    job = SyncMaxdarLeads()
+    job.sweep(db, since=SUBMITTED)
+    job.sweep(db, since=SUBMITTED)
+
+    [(_, first_until), (second_from, _)] = maxdar["calls"]
+    assert _utc(second_from) == _utc(first_until) - timedelta(minutes=15)
+
+
+def test_url_set_after_the_deploy_still_backfills(db, maxdar, monkeypatch):
+    # The scheduler's watermark moves on every sweep, also while the job is off; the cursor doesn't.
     monkeypatch.setattr(sync_mod.settings, "maxdar_database_url", None)
-    maxdar["rows"] = [_row()]
-
-    assert SyncMaxdarLeads().sweep(db, since=SUBMITTED) == []
+    for _ in range(3):
+        assert SyncMaxdarLeads().sweep(db, since=SUBMITTED) == []
     assert maxdar["calls"] == []
+    assert db.get(BackgroundJobState, "sync_maxdar_leads:read_until") is None
+
+    monkeypatch.setattr(sync_mod.settings, "maxdar_database_url", "postgresql://maxdar.example/neondb")
+    maxdar["rows"] = [_row()]
+    assert len(SyncMaxdarLeads().sweep(db, since=datetime.now(timezone.utc))) == 1
+    [(read_from, _)] = maxdar["calls"]
+    assert datetime.now(timezone.utc) - read_from >= timedelta(days=sync_mod.settings.summary_backfill_days)
+
+
+def test_failed_read_keeps_the_cursor(db, maxdar, monkeypatch):
+    def unreachable(since, until):
+        raise ConnectionError("maxdar is down")
+
+    monkeypatch.setattr(sync_mod, "fetch_submissions", unreachable)
+    with pytest.raises(ConnectionError):
+        SyncMaxdarLeads().sweep(db, since=SUBMITTED)
+    db.rollback()
+
+    assert db.get(BackgroundJobState, "sync_maxdar_leads:read_until") is None
 
 
 # --- recompute_journey with copied fills ---------------------------------------------------------
