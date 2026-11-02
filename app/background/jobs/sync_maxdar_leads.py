@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 import structlog
 
 from app.background.jobs.recompute_journey import SAME_SUBMISSION_WINDOW, SERVER_TRACKING_METHOD, form_email
+from app.background.models import BackgroundJobState
 from app.background.registry import registry
 from app.config import settings
 from app.models.summary import LeadSummary
@@ -39,9 +40,13 @@ FORM_PAGES = {
 # A submission maxdar got in the last two minutes waits for the next sweep: the tracker's own
 # form_submit for it may still be on its way.
 _SETTLE = timedelta(minutes=2)
-# Each sweep reads this far back past its watermark, so those waiting rows are not skipped.
+# Each sweep reads this far back past its cursor, so those waiting rows are not skipped.
 # Rows already copied are recognised by their message_id.
 _OVERLAP = timedelta(minutes=15)
+
+# How far maxdar has been read. Not the scheduler's watermark: that moves on every sweep, also
+# while maxdar_database_url is unset, so a URL set days after the deploy would never read them.
+_CURSOR_KEY = "sync_maxdar_leads:read_until"
 
 _NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "crawldoctor.agitracker.io")
 
@@ -148,18 +153,31 @@ def record_submission(db: Session, row: Mapping[str, Any]) -> Optional[str]:
 class SyncMaxdarLeads:
     """Sweep: copy maxdar's new submissions the tracker missed. Handle: recompute that lead.
 
-    The first sweep reads back summary_backfill_days, so the leads missed before it ran appear too.
+    The sweep ignores `since` and reads from its own cursor (_CURSOR_KEY). Until maxdar has been
+    read once, it reads back summary_backfill_days, so the leads missed before then appear too.
     """
 
     def sweep(self, db: Session, since: datetime) -> List[Dict[str, Any]]:
         if not settings.maxdar_database_url:
             return []
-        rows = fetch_submissions(_utc(since) - _OVERLAP, datetime.now(timezone.utc) - _SETTLE)
+        now = datetime.now(timezone.utc)
+        cursor = db.get(BackgroundJobState, _CURSOR_KEY)
+        if cursor:
+            read_from = _utc(cursor.last_processed_at) - _OVERLAP
+        else:
+            read_from = now - timedelta(days=settings.summary_backfill_days)
+        read_until = now - _SETTLE
+
+        rows = fetch_submissions(read_from, read_until)
         clients = []
         for row in rows:
             client_id = record_submission(db, row)
             if client_id and client_id not in clients:
                 clients.append(client_id)
+        if cursor:
+            cursor.last_processed_at = read_until
+        else:
+            db.add(BackgroundJobState(job_name=_CURSOR_KEY, last_processed_at=read_until))
         db.commit()
         if clients:
             logger.info("Copied leads the tracker missed from maxdar", read=len(rows), leads=len(clients))

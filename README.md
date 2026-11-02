@@ -135,8 +135,10 @@ maxdar (the GTM team's Neon project) receives every submission of those forms. W
   like any other.
 - Copied leads have no pages, visits or source, since the visitor was never tracked. Their
   "Captured on" is the form's usual page.
-- The first run reads back `CRAWLDOCTOR_SUMMARY_BACKFILL_DAYS` (30), so last month's missed leads
-  appear too. Each maxdar row is copied once, keyed by its id.
+- Until it has read maxdar once (the first sweep after the URL is set, whenever that is), it reads
+  back `CRAWLDOCTOR_SUMMARY_BACKFILL_DAYS` (30), so last month's missed leads appear too. After
+  that it keeps its own cursor (`sync_maxdar_leads:read_until` in `background_job_state`). Each
+  maxdar row is copied once, keyed by its id.
 
 ## 🤖 Detected AI Crawlers
 
