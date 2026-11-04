@@ -6,7 +6,7 @@ import { toast } from "sonner"
 import { ShortId } from "@/components/client-id"
 import { DataPagination } from "@/components/data-pagination"
 import { DateRangePicker } from "@/components/date-range-picker"
-import { DetailSheet, type Detail } from "@/components/detail-sheet"
+import { DetailDialog, type Detail } from "@/components/detail-dialog"
 import { ClearFilters, FilterBar, ResultCount, SearchInput, SuggestInput, useFacet } from "@/components/filters"
 import { Page, PageHeader } from "@/components/page-header"
 import { EmptyRow, LoadingRows } from "@/components/table-state"
@@ -136,7 +136,7 @@ export function LeadsPage() {
           <DataPagination data={data} page={page} pageSize={size} onPage={setPage} onPageSize={setSize} />
         </Card>
       </Page>
-      <DetailSheet detail={detail} onChange={setDetail} />
+      <DetailDialog detail={detail} onChange={setDetail} />
     </>
   )
 }

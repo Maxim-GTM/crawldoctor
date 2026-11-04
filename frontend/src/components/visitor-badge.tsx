@@ -28,13 +28,15 @@ export function SessionKind({ classification }: { classification?: string | null
 }
 
 /** "google / cpc / launch" with the empty parts left out; "direct" when there are none. */
-export function SourceText({ source, medium, campaign, className }: {
+export function SourceText({ source, medium, campaign, className, wrap }: {
   source?: string | null; medium?: string | null; campaign?: string | null; className?: string
+  /** Wrap long campaign names instead of cutting them off */
+  wrap?: boolean
 }) {
   const parts = [source, medium, campaign].filter((p) => p && p !== "none")
   if (!parts.length) return <span className={cn("text-muted-foreground", className)}>direct</span>
   return (
-    <span className={cn("truncate", className)} title={parts.join(" / ")}>
+    <span className={cn(wrap ? "wrap-anywhere" : "truncate", className)} title={parts.join(" / ")}>
       {parts[0]}
       {parts.slice(1).map((p, i) => <span key={i} className="text-muted-foreground"> / {p}</span>)}
     </span>

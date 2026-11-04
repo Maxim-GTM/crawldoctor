@@ -5,7 +5,7 @@ import { ChevronRight, FileCheck2, Users } from "lucide-react"
 import { ShortId } from "@/components/client-id"
 import { DataPagination } from "@/components/data-pagination"
 import { DateRangePicker } from "@/components/date-range-picker"
-import { DetailSheet, type Detail } from "@/components/detail-sheet"
+import { DetailDialog, type Detail } from "@/components/detail-dialog"
 import {
   ClearFilters, FilterBar, FilterSelect, FilterSwitch, ResultCount, SearchInput, SuggestInput, VISITOR_OPTIONS, useFacet,
 } from "@/components/filters"
@@ -107,7 +107,7 @@ export function UsersPage() {
           <DataPagination data={data} page={page} pageSize={size} onPage={setPage} onPageSize={setSize} />
         </Card>
       </Page>
-      <DetailSheet detail={detail} onChange={setDetail} />
+      <DetailDialog detail={detail} onChange={setDetail} />
     </>
   )
 }

@@ -10,7 +10,7 @@ import { BarList } from "@/components/bar-list"
 import { ShortId } from "@/components/client-id"
 import { DataPagination } from "@/components/data-pagination"
 import { DateRangePicker } from "@/components/date-range-picker"
-import { DetailSheet, type Detail } from "@/components/detail-sheet"
+import { DetailDialog, type Detail } from "@/components/detail-dialog"
 import {
   ClearFilters, FilterBar, FilterSelect, SearchInput, SuggestInput, VISITOR_OPTIONS, countryName, useFacet,
 } from "@/components/filters"
@@ -161,7 +161,7 @@ export function OverviewPage() {
         <RecentActivity range={range} onOpen={setDetail} />
       </Page>
 
-      <DetailSheet detail={detail} onChange={setDetail} />
+      <DetailDialog detail={detail} onChange={setDetail} />
 
       <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <AlertDialogContent>

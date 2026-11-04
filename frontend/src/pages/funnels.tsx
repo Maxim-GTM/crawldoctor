@@ -5,7 +5,7 @@ import { toast } from "sonner"
 
 import { ShortId } from "@/components/client-id"
 import { DateRangePicker } from "@/components/date-range-picker"
-import { DetailSheet, type Detail } from "@/components/detail-sheet"
+import { DetailDialog, type Detail } from "@/components/detail-dialog"
 import { FunnelSteps, funnelRate } from "@/components/funnel-steps"
 import { Page, PageHeader } from "@/components/page-header"
 import { SourceText } from "@/components/visitor-badge"
@@ -101,7 +101,7 @@ export function FunnelsPage() {
       </Page>
 
       <FunnelConfigDialog open={configOpen} onOpenChange={setConfigOpen} />
-      <DetailSheet detail={detail} onChange={setDetail} />
+      <DetailDialog detail={detail} onChange={setDetail} />
     </>
   )
 }

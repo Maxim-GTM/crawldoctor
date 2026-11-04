@@ -16,6 +16,15 @@ export function fullTime(iso: string | null | undefined): string {
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString()
 }
 
+/** "Nov 3, 2026, 10:42 AM" */
+export function shortDateTime(iso: string | null | undefined): string {
+  if (!iso) return "—"
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })
+}
+
 export function shortDate(iso: string | null | undefined): string {
   if (!iso) return "—"
   const d = new Date(iso)

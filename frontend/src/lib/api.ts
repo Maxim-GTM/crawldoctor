@@ -93,9 +93,12 @@ export type TimelineItem = {
   city?: string
   tracking_id?: string
   tracking_method?: string
+  referrer?: string | null
+  path?: string | null
+  page_domain?: string | null
   data?: Record<string, unknown> | null
 }
-export type Timeline = { timeline: TimelineItem[]; has_next?: boolean; has_prev?: boolean }
+export type Timeline = { timeline: TimelineItem[]; has_next?: boolean; has_prev?: boolean; total_count?: number }
 
 export type SessionRow = {
   session_id: string
@@ -109,6 +112,9 @@ export type SessionRow = {
   client_side_language?: string
   client_side_screen_resolution?: string
   client_side_timezone?: string
+  client_side_viewport_size?: string
+  client_side_device_memory?: string
+  client_side_connection_type?: string
   entry_referrer_domain?: string
 }
 export type SessionList = Paged & { sessions: SessionRow[] }
@@ -131,7 +137,10 @@ export type UserList = Paged & { users: UnifiedUser[] }
 export type UserFilters = { q?: string; converted?: boolean; source?: string; visitor?: string }
 export type UserActivity = {
   attribution?: Attribution
-  summary?: { unique_sessions?: number; total_visits?: number; total_events?: number; unique_domains?: number; conversions?: number }
+  summary?: {
+    unique_sessions?: number; total_visits?: number; total_events?: number; unique_domains?: number; conversions?: number
+    first_seen?: string | null; last_seen?: string | null
+  }
   sessions?: { session_id: string; city?: string; country?: string; first_visit?: string; last_visit?: string; visit_count: number }[]
   timeline?: TimelineItem[]
 }

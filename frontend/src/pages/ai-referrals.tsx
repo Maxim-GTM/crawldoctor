@@ -6,7 +6,7 @@ import { ChevronRight, Eye, FileCheck2, Inbox, Sparkles, UserRound } from "lucid
 import { BarList } from "@/components/bar-list"
 import { ShortId } from "@/components/client-id"
 import { DateRangePicker } from "@/components/date-range-picker"
-import { DetailSheet, type Detail } from "@/components/detail-sheet"
+import { DetailDialog, type Detail } from "@/components/detail-dialog"
 import { Page, PageHeader } from "@/components/page-header"
 import { StatCard } from "@/components/stat-card"
 import { EmptyRow, LoadingRows } from "@/components/table-state"
@@ -158,7 +158,7 @@ export function AiReferralsPage() {
           Later pages in the same visit carry an internal source, so they aren't included.
         </p>
       </Page>
-      <DetailSheet detail={detail} onChange={setDetail} />
+      <DetailDialog detail={detail} onChange={setDetail} />
     </>
   )
 }
