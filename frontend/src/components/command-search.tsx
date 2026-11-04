@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query"
 import { CornerDownLeft, FileText, History, Loader2, Route, Search } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 
-import { DetailSheet, type Detail } from "@/components/detail-sheet"
+import { DetailDialog, type Detail } from "@/components/detail-dialog"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
@@ -119,7 +119,7 @@ export function CommandSearch() {
         </DialogContent>
       </Dialog>
 
-      <DetailSheet detail={detail} onChange={setDetail} />
+      <DetailDialog detail={detail} onChange={setDetail} />
     </>
   )
 }

@@ -4,7 +4,7 @@ import { Activity, ChevronRight, Eraser, Pause, Play } from "lucide-react"
 
 import { ShortId } from "@/components/client-id"
 import { JsonBlock } from "@/components/data-value"
-import { DetailSheet, type Detail } from "@/components/detail-sheet"
+import { DetailDialog, type Detail } from "@/components/detail-dialog"
 import { ClearFilters, FilterBar, FilterSelect, FilterSwitch, SearchInput } from "@/components/filters"
 import { Page, PageHeader } from "@/components/page-header"
 import { EmptyRow, LoadingRows } from "@/components/table-state"
@@ -176,7 +176,7 @@ export function LivePage() {
         </Card>
       </Page>
 
-      <DetailSheet detail={detail} onChange={setDetail} />
+      <DetailDialog detail={detail} onChange={setDetail} />
     </>
   )
 }
