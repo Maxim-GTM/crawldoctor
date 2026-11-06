@@ -270,6 +270,20 @@ def test_lead_search_and_company(client):
     assert ids(get(client, "/leads", q="robot", limit=1, **rng)["leads"], "client_id") == ["cid-alice"]
 
 
+def test_leads_newest_capture_first(client):
+    # Erin filled the form 5 days ago but browsed again 10 minutes ago: she sorts by her capture
+    db = client.app.dependency_overrides[get_db]()
+    db.add(LeadSummary(client_id="cid-erin", email="erin@hooli.xyz", name="Erin", captured_path="/enterprise",
+                       captured_at=_ts(days=5), last_seen=_ts(minutes=10), captured_data="{}"))
+    db.commit()
+    rng = {"start_date": WEEK_AGO, "end_date": TODAY}
+    order = ["cid-alice", "cid-dan", "cid-bob", "cid-erin"]
+    assert [l["client_id"] for l in get(client, "/leads", **rng)["leads"]] == order
+    assert [l["client_id"] for l in get(client, "/leads", q="@", **rng)["leads"]] == order
+    pages = [get(client, "/leads", limit=2, offset=o, **rng)["leads"] for o in (0, 2)]
+    assert [l["client_id"] for page in pages for l in page] == order
+
+
 def test_search_ignores_form_questions(client):
     assert get(client, "/search", q="gateway")["results"] == []
 
