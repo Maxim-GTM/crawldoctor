@@ -2262,7 +2262,11 @@ class AnalyticsService:
             if medium: query = query.filter(func.lower(LeadSummary.medium) == medium.lower())
             if campaign: query = query.filter(func.lower(LeadSummary.campaign) == campaign.lower())
             
-            query = query.order_by(LeadSummary.last_seen.desc())
+            # Newest capture first, as the list's "Captured" column shows. last_seen moves whenever the
+            # lead browses again, so ordering by it put returning leads above newer ones.
+            query = query.order_by(
+                LeadSummary.captured_at.desc().nullslast(), LeadSummary.last_seen.desc().nullslast(), LeadSummary.client_id,
+            )
             if term:
                 # captured_data also holds the form's questions ("Are you using an LLM Gateway today?"),
                 # so the SQL match over-selects; keep leads whose own answers match. A range holds
